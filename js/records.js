@@ -5,6 +5,8 @@
 //   f|<foodId>            a saved food (for quick-add)
 //   s                     settings
 //   p|<date>|<entryId>    one meal or food on a day
+//   k|<itemKey>           a ticked-off shopping list item
+//   x|<id>                an extra item added to the shopping list by hand
 // Pure functions, so they can be tested without a browser.
 
 const LISTS = { r: 'recipes', c: 'categories', f: 'foods' };
@@ -18,6 +20,9 @@ export function flatten(state) {
   for (const [date, day] of Object.entries(state.plan || {})) {
     for (const [id, entry] of Object.entries(day || {})) out[`p|${date}|${id}`] = entry;
   }
+  const shop = state.shopping || {};
+  for (const [k, v] of Object.entries(shop.checked || {})) out[`k|${k}`] = v;
+  for (const x of shop.extras || []) out[`x|${x.id}`] = x;
   return out;
 }
 
@@ -32,6 +37,19 @@ export function applyRecord(state, key, value) {
     else list.push(value);
   } else if (kind === 's') {
     if (value !== undefined) state.settings = { ...state.settings, ...value };
+  } else if (kind === 'k' || kind === 'x') {
+    if (!state.shopping) state.shopping = { checked: {}, extras: [] };
+    const shop = state.shopping;
+    if (kind === 'k') {
+      const k = key.slice(2);
+      if (value === undefined) delete shop.checked[k];
+      else shop.checked[k] = value;
+    } else {
+      const i = shop.extras.findIndex((x) => x.id === a);
+      if (value === undefined) { if (i >= 0) shop.extras.splice(i, 1); }
+      else if (i >= 0) shop.extras[i] = value;
+      else shop.extras.push(value);
+    }
   } else if (kind === 'p') {
     if (value === undefined) {
       if (state.plan[a]) {

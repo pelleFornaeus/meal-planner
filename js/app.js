@@ -4,6 +4,9 @@ import { initPhotos, photoUrl, savePhoto } from './photos.js';
 import { lookupBarcode, searchFoods } from './lookup.js';
 import { startScanner } from './scanner.js';
 import {
+  amountText, listText, pruneChecks, setChecked, shoppingList,
+} from './shopping.js';
+import {
   SECTIONS, guessSection, normUnit, nutritionFor, perLabel, priceFor,
 } from './foods.js';
 import {
@@ -39,6 +42,9 @@ const ui = {
   foodSearch: '',
   filter: {}, // groupId -> Set(optionIds)
   filtersOpen: false,
+  shopFrom: null, // first day of the shopping list (default today)
+  shopGroup: 'section', // or 'recipe'
+  shopRecipes: new Set(), // show only these recipes ('foods' = foods added to days)
   summaryMode: 'week',
   summaryAnchor: null,
   sheets: [], // stack of open sheets; the last one shows
@@ -101,6 +107,7 @@ function renderAll() {
   const main = $('#main');
   if (ui.tab === 'plan') main.innerHTML = renderPlan();
   else if (ui.tab === 'recipes') main.innerHTML = renderRecipes();
+  else if (ui.tab === 'shop') main.innerHTML = renderShop();
   else if (ui.tab === 'summary') main.innerHTML = renderSummary();
   else main.innerHTML = renderSettings();
   renderSheetInner();
@@ -351,6 +358,148 @@ function renderFoods() {
         <button class="btn primary" data-act="food-add">Add a food</button>
       </div>`}
   `;
+}
+
+// ---------- Shopping list ----------
+
+function shopRange() {
+  const from = ui.shopFrom || today();
+  const days = Math.max(1, Math.min(31, Number(S().settings.shopDays) || 7));
+  return { from, to: addDays(from, days - 1), days };
+}
+
+// The list, filtered by recipe, in groups by store section or by recipe.
+function shopGroups() {
+  const st = S();
+  const { from, to } = shopRange();
+  const list = shoppingList(st, from, to);
+  const picked = ui.shopRecipes;
+  const extras = (st.shopping?.extras || []).map((x) => ({
+    key: `x:${x.id}`, extraId: x.id, name: x.name, amount: '', cost: null, recipes: [],
+    section: x.section || guessSection(x.name), done: !!x.checked, extra: true,
+  }));
+  const keep = (i) => !picked.size || i.recipes.some((id) => picked.has(id)) || (picked.has('foods') && i.hasFoods);
+  const items = list.items.filter(keep);
+  const shownExtras = picked.size ? [] : extras;
+  const order = (a, b) => (a.done - b.done) || a.name.localeCompare(b.name);
+  let groups;
+  if (ui.shopGroup === 'recipe') {
+    groups = list.recipes.filter((r) => !picked.size || picked.has(r.recipe.id)).map(({ recipe, cooks }) => ({
+      title: recipe.name,
+      sub: cooks.map((c) => `${shortDay(c.date)}${c.scale !== 1 ? ` ×${fmtQty(c.scale)}` : ''}`).join(', '),
+      items: items.filter((i) => i.recipes.includes(recipe.id)).map((i) => {
+        // Just this recipe's share of the item.
+        const parts = i.parts.filter((p) => p.recipeId === recipe.id);
+        return { ...i, amount: amountText(parts, i.food), cost: null, share: true };
+      }).sort(order),
+    }));
+    const foods = items.filter((i) => i.hasFoods).map((i) => ({ ...i, amount: amountText(i.parts.filter((p) => !p.recipeId), i.food), cost: null, share: true }));
+    if (foods.length && (!picked.size || picked.has('foods'))) groups.push({ title: 'Other foods', sub: 'added to days', items: foods.sort(order) });
+    if (shownExtras.length) groups.push({ title: 'Extra items', items: shownExtras.sort(order) });
+  } else {
+    const all = [...items, ...shownExtras];
+    groups = SECTIONS.map((sec) => ({ title: sec, items: all.filter((i) => i.section === sec).sort(order) }));
+    groups.push({ title: 'Other', items: all.filter((i) => !SECTIONS.includes(i.section)).sort(order) });
+    groups = groups.filter((g) => g.items.length);
+    // Merge the two "Other" groups if both exist.
+    const others = groups.filter((g) => g.title === 'Other');
+    if (others.length > 1) { others[0].items.push(...others[1].items); groups = groups.filter((g) => g !== others[1]); }
+  }
+  const visible = [...items, ...shownExtras];
+  const open = visible.filter((i) => !i.done);
+  return {
+    list, groups, from, to,
+    left: open.length,
+    total: visible.length,
+    cost: open.reduce((s, i) => s + (i.cost || 0), 0),
+    unpriced: open.filter((i) => i.cost == null && !i.extra).length,
+  };
+}
+
+function renderShop() {
+  const st = S();
+  const { from, to, days } = shopRange();
+  const g = shopGroups();
+  const recipeChips = g.list.recipes;
+  const hasFoods = g.list.items.some((i) => i.hasFoods);
+  return `
+    <header class="page-header">
+      <h1>Shopping</h1>
+      ${g.total ? '<button class="btn small" data-act="shop-share">Copy list</button>' : ''}
+    </header>
+    <div class="card shop-range">
+      <div class="shop-range-row">
+        <label class="field"><span>From</span><input id="shop-from" type="date" value="${from}" /></label>
+        <label class="field"><span>Days</span><input id="shop-days" type="number" min="1" max="31" inputmode="numeric" value="${days}" /></label>
+      </div>
+      <p class="hint flush">${esc(shortDate(from))} – ${esc(shortDate(to))}. Each batch is bought for the day it’s cooked, so leftovers aren’t bought twice.</p>
+    </div>
+    <div class="seg">
+      <button class="${ui.shopGroup !== 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="section">By aisle</button>
+      <button class="${ui.shopGroup === 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="recipe">By recipe</button>
+    </div>
+    ${recipeChips.length > 1 || (recipeChips.length && hasFoods) ? `
+      <div class="chips shop-filter">
+        <button class="chip tiny${!ui.shopRecipes.size ? ' on' : ''}" data-act="shop-filter" data-id="">All</button>
+        ${recipeChips.map(({ recipe }) => `<button class="chip tiny${ui.shopRecipes.has(recipe.id) ? ' on' : ''}" data-act="shop-filter" data-id="${recipe.id}">${esc(recipe.name)}</button>`).join('')}
+        ${hasFoods ? `<button class="chip tiny${ui.shopRecipes.has('foods') ? ' on' : ''}" data-act="shop-filter" data-id="foods">Other foods</button>` : ''}
+      </div>` : ''}
+    ${g.total ? `
+      <div class="shop-summary">
+        <span><strong>${g.left}</strong> of ${g.total} left${g.cost ? ` · about <strong>${esc(money(g.cost))}</strong>` : ''}</span>
+        ${g.left < g.total ? '<button class="link" data-act="shop-uncheck">Untick all</button>' : ''}
+      </div>
+      ${g.unpriced && g.cost ? `<p class="hint">${g.unpriced} item${g.unpriced === 1 ? ' has' : 's have'} no price, so the total leaves ${g.unpriced === 1 ? 'it' : 'them'} out.</p>` : ''}
+      ${g.groups.map((grp) => `
+        <h2 class="section">${esc(grp.title)}${grp.sub ? ` <span class="source">${esc(grp.sub)}</span>` : ''}</h2>
+        <ul class="food-list shop-list">${grp.items.map(renderShopItem).join('')}</ul>`).join('')}
+    ` : `<div class="card empty-card">
+        <p><strong>Nothing to buy for these days.</strong></p>
+        <p class="hint flush">Plan some meals on the Plan tab and their ingredients show up here. You can also add things by hand below.</p>
+      </div>`}
+    <form class="shop-add" data-form="shop-add">
+      <input id="shop-extra" class="search" type="text" placeholder="Add an item, like paper towels" autocomplete="off" enterkeyhint="done" />
+      <button class="btn primary" type="submit">Add</button>
+    </form>
+    ${(st.shopping?.extras || []).some((x) => x.checked) ? '<p class="hint center"><button class="link" data-act="shop-clear-extras">Remove ticked extra items</button></p>' : ''}
+  `;
+}
+
+function renderShopItem(i) {
+  const names = i.recipes.map((id) => findRecipe(S(), id)?.name).filter(Boolean);
+  if (i.hasFoods && !i.share) names.push('added to a day');
+  const meta = [
+    i.share ? '' : names.join(', '),
+    i.boughtSome && !i.done ? 'some bought already' : '',
+  ].filter(Boolean).join(' · ');
+  return `
+    <li class="shop-item${i.done ? ' is-done' : ''}">
+      <button class="food-row" data-act="shop-check" data-key="${esc(i.key)}" aria-pressed="${i.done}">
+        <span class="check${i.done ? ' on' : ''}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <span class="entry-main">
+          <span class="title">${esc(i.name)}${i.amount ? ` <span class="amount">${esc(i.amount)}</span>` : ''}</span>
+          ${meta ? `<span class="meta">${esc(meta)}</span>` : ''}
+        </span>
+        ${i.cost != null && !i.share ? `<span class="price">${esc(money(i.cost))}</span>` : ''}
+      </button>
+      ${i.extra ? `<button class="icon-btn small" data-act="shop-remove-extra" data-id="${i.extraId}" aria-label="Remove ${esc(i.name)}">×</button>` : ''}
+    </li>`;
+}
+
+async function shareShopList() {
+  const g = shopGroups();
+  const groups = g.groups.map((grp) => ({ title: grp.title, items: grp.items.filter((i) => !i.done) })).filter((grp) => grp.items.length);
+  if (!groups.length) { toast('Everything is ticked off'); return; }
+  const text = listText(groups);
+  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+    try { await navigator.share({ title: 'Shopping list', text }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied. Paste it into Notes or a message.');
+  } catch {
+    prompt('Copy the list:', text);
+  }
 }
 
 // ---------- Summary tab ----------
@@ -1776,6 +1925,39 @@ function onClick(e) {
     }
     case 'categories': openSheet({ kind: 'categories', key: key() }); break;
 
+    // Shopping list
+    case 'shop-group': ui.shopGroup = el.dataset.group; render(); break;
+    case 'shop-filter': {
+      const id = el.dataset.id;
+      if (!id) ui.shopRecipes.clear();
+      else if (ui.shopRecipes.has(id)) ui.shopRecipes.delete(id);
+      else ui.shopRecipes.add(id);
+      render();
+      break;
+    }
+    case 'shop-check': {
+      const k = el.dataset.key;
+      if (k.startsWith('x:')) {
+        const x = st.shopping.extras.find((y) => y.id === k.slice(2));
+        if (x) x.checked = !x.checked;
+      } else {
+        const item = shoppingList(st, shopRange().from, shopRange().to).items.find((i) => i.key === k);
+        setChecked(st, k, !item?.done, shopRange().to);
+      }
+      store.save();
+      break;
+    }
+    case 'shop-uncheck':
+      if (confirm('Untick everything on the list?')) {
+        st.shopping.checked = {};
+        for (const x of st.shopping.extras) x.checked = false;
+        store.save();
+      }
+      break;
+    case 'shop-remove-extra': st.shopping.extras = st.shopping.extras.filter((x) => x.id !== el.dataset.id); store.save(); break;
+    case 'shop-clear-extras': st.shopping.extras = st.shopping.extras.filter((x) => !x.checked); store.save(); break;
+    case 'shop-share': shareShopList(); break;
+
     // Summary tab
     case 'summary-mode': ui.summaryMode = el.dataset.mode; render(); break;
     case 'summary-prev':
@@ -2097,6 +2279,16 @@ function onSubmit(e) {
     addFoods(top(), input.value);
     return;
   }
+  if (kind === 'shop-add') {
+    const input = $('#shop-extra');
+    const name = input.value.trim();
+    if (!name) return;
+    st.shopping.extras.push({ id: uid(), name, section: guessSection(name), checked: false });
+    input.value = '';
+    store.save();
+    $('#shop-extra')?.focus({ preventScroll: true });
+    return;
+  }
   if (kind === 'cat-add-option') {
     const input = $('input', form);
     const name = input.value.trim();
@@ -2146,6 +2338,13 @@ async function onChange(e) {
     return;
   }
   if (el.id === 'recipe-sort') { ui.sort = el.value; render(); return; }
+  if (el.id === 'shop-from') { ui.shopFrom = el.value || null; render(); return; }
+  if (el.id === 'shop-days') {
+    const n = Math.max(1, Math.min(31, Math.round(Number(el.value)) || 7));
+    st.settings.shopDays = n;
+    store.save();
+    return;
+  }
   if (el.dataset.setting) {
     const k = el.dataset.setting;
     if (k === 'weekStart') st.settings[k] = Number(el.value);
@@ -2219,6 +2418,7 @@ setInterval(() => {
   }
 }, 30_000);
 
+pruneChecks(S(), today());
 render();
 initPhotos(() => render());
 
