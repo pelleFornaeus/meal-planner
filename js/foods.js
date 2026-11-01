@@ -114,6 +114,7 @@ export const SECTIONS = [
 ];
 
 const SECTION_WORDS = [
+  ['Household', /\b(paper towel|toilet paper|tissues|napkins|soap|detergent|dish ?washer|sponge|trash bag|bin bag|garbage bag|foil|cling film|plastic wrap|baking paper|parchment|shampoo|toothpaste|batteries)/],
   ['Spices', /\b(salt|black pepper|cumin|paprika|cinnamon|oregano|thyme|chili powder|chilli powder|curry|turmeric|nutmeg|spice|seasoning|bay lea|vanilla)\b/],
   ['Frozen', /\bfrozen\b/],
   ['Dairy & eggs', /\b(milk|cheese|cheddar|mozzarella|parmesan|feta|yog(h)?urt|butter|cream|egg|eggs)\b/],

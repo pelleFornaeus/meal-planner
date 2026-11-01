@@ -520,3 +520,20 @@ h2.recipe-title { font-size: 20px; }
   .ed-ings .qty, .ed-ings .unit { flex: 1 1 0; width: auto; }
   .ed-ings .name { flex: 1 1 100%; order: 5; }
 }
+
+/* ---------- Shopping list ---------- */
+.shop-range { gap: 6px; }
+.shop-range-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; max-width: 380px; }
+.shop-filter { margin: 4px 0 10px; }
+.shop-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 4px 0; font-size: 15px; }
+.shop-item { display: flex; align-items: center; padding-right: 6px; }
+.shop-list .food-row { padding: 2px 14px 2px 4px; min-height: 52px; }
+.shop-list .check { width: 40px; height: 44px; }
+.shop-list .check svg { width: 24px; height: 24px; }
+.shop-item .title { font-weight: 500; overflow-wrap: anywhere; }
+.shop-item .amount { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.shop-item .price { flex: none; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.shop-item.is-done .title { color: var(--muted); text-decoration: line-through; }
+.shop-item.is-done .amount, .shop-item.is-done .meta { opacity: .7; }
+.shop-add { display: flex; gap: 8px; margin-top: 20px; }
+.shop-add .search { flex: 1; }

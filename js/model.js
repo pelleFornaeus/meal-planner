@@ -46,7 +46,8 @@ export function defaultState() {
     categories: defaultCategories(),
     foods: [],
     plan: {},
-    settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '' },
+    shopping: { checked: {}, extras: [] },
+    settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '', shopDays: 7 },
   };
 }
 
@@ -57,6 +58,11 @@ export function migrate(s) {
   out.categories = Array.isArray(s.categories) ? s.categories : d.categories;
   out.foods = Array.isArray(s.foods) ? s.foods.map(upgradeFood) : [];
   out.plan = s.plan && typeof s.plan === 'object' ? s.plan : {};
+  const shop = s.shopping && typeof s.shopping === 'object' ? s.shopping : {};
+  out.shopping = {
+    checked: shop.checked && typeof shop.checked === 'object' ? shop.checked : {},
+    extras: Array.isArray(shop.extras) ? shop.extras : [],
+  };
   out.settings = { ...d.settings, ...(s.settings || {}) };
   if (!Array.isArray(out.settings.slots) || !out.settings.slots.length) out.settings.slots = d.settings.slots;
   if (!out.settings.goals) out.settings.goals = {};
