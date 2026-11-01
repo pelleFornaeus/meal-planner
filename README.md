@@ -6,7 +6,9 @@ A meal planner that runs in your browser and works offline. Plan the week from y
 - **Categories.** Groups like Meal, Difficulty, Cost and Time, each with its own labels. A recipe can have any number of them. Filter and sort the recipe list by them. Edit the groups in Settings.
 - **Week plan.** Breakfast, lunch, dinner and snacks for each day (rename or add meals in Settings). Tap + to add a recipe or a food.
 - **Batches and leftovers.** A recipe that makes 4 portions is cooked once. Tap the meal and choose **Plan leftovers** to eat the rest on other days. When you add the same recipe again, the app offers the leftovers. Each day counts only the portions eaten, and the shopping list (coming next) buys the batch once.
-- **Quick-add foods.** Type `100 g Cheerios, 200 ml milk`. Fill in the nutrition and price once, and next time it fills in by itself, scaled to the amount.
+- **Quick-add foods.** Type `100 g Cheerios, 200 ml milk`. Foods in your list fill in by themselves, scaled to the amount; a new food is looked up.
+- **Nutrition lookup.** Search USDA FoodData Central (plain foods like chicken thighs or milk) and Open Food Facts (packaged foods), or scan a barcode. Picked foods are saved to **Recipes → Foods** with their nutrition per 100 g, sizes (1 cup = 244 g) and your price (3.49 for 1 gal), so they work offline afterwards.
+- **Recipe numbers from ingredients.** Tap **Find** next to an ingredient to match it to a food. The editor then works out nutrition per portion and the recipe's price; tap **Use these numbers** to fill them in.
 - **Totals.** Each day shows calories, protein and cost; tap it for carbs, fat, sugar, fiber and your daily goals. The Summary tab shows cost and nutrition per week or month, with charts.
 
 ## Install on iPhone
@@ -30,7 +32,9 @@ npm start   # serves the app at http://localhost:8000
 npm test    # runs the logic tests (Node 20+)
 ```
 
-- `js/model.js`: recipes, the plan, batches and leftovers, totals, parsing ingredient lines
+- `js/model.js`: recipes, the plan, batches and leftovers, totals, parsing ingredient lines, the food list
+- `js/foods.js`: units, nutrition and price for an amount, reading USDA and Open Food Facts results
+- `js/lookup.js`: the online searches; `js/scanner.js`: barcode scanning (ZXing in `js/vendor`, Apache 2.0, loaded only when scanning)
 - `js/app.js`: the interface
 - `js/store.js`: saving to the browser
 - `js/records.js`, `js/sync.js`: syncing through Supabase, one record per recipe, category group, saved food or planned meal. The newest change to each record wins.
