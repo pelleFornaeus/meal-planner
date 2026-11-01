@@ -52,8 +52,10 @@ test('saved foods scale to the amount typed', () => {
   assert.equal(item.cost, 0.4);
   // No amount: use the saved one.
   assert.equal(foodFor(s, { name: 'Cheerios', amount: null, unit: '' }).item.amount, 100);
-  // Different unit can't be scaled.
-  assert.equal(foodFor(s, { name: 'Cheerios', amount: 1, unit: 'cup' }).matched, false);
+  // A unit we can't weigh keeps the food but no numbers.
+  const bowl = foodFor(s, { name: 'Cheerios', amount: 1, unit: 'bowl' });
+  assert.equal(bowl.matched, true);
+  assert.equal(bowl.item.unconverted, true);
 });
 
 test('a batch is cooked once and eaten over several days', () => {

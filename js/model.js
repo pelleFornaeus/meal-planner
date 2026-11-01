@@ -1,5 +1,8 @@
 // The app's data and the rules for working with it. No browser code here, so it can be tested.
 import { addDays, daysBetween } from './dates.js';
+import {
+  defaultAmount, foodFromAmount, nutritionFor, priceFor, upgradeFood,
+} from './foods.js';
 
 export const NUTRIENTS = [
   { key: 'cal', label: 'Calories', short: 'kcal', unit: 'kcal' },
@@ -43,7 +46,7 @@ export function defaultState() {
     categories: defaultCategories(),
     foods: [],
     plan: {},
-    settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {} },
+    settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '' },
   };
 }
 
@@ -52,7 +55,7 @@ export function migrate(s) {
   const out = { ...d, ...s };
   out.recipes = Array.isArray(s.recipes) ? s.recipes : [];
   out.categories = Array.isArray(s.categories) ? s.categories : d.categories;
-  out.foods = Array.isArray(s.foods) ? s.foods : [];
+  out.foods = Array.isArray(s.foods) ? s.foods.map(upgradeFood) : [];
   out.plan = s.plan && typeof s.plan === 'object' ? s.plan : {};
   out.settings = { ...d.settings, ...(s.settings || {}) };
   if (!Array.isArray(out.settings.slots) || !out.settings.slots.length) out.settings.slots = d.settings.slots;
@@ -372,6 +375,16 @@ export function entryTotals(state, e) {
   const out = { cost: null, missingNutrition: false, missingCost: false };
   for (const n of NUTRIENTS) out[n.key] = null;
   if (e.type === 'food') {
+    // Linked to your food list: use the food's current numbers and price.
+    const food = e.foodId ? getFood(state, e.foodId) : null;
+    const live = food ? nutritionFor(food, e.amount, e.unit) : null;
+    if (live) {
+      for (const n of NUTRIENTS) if (live[n.key] != null) out[n.key] = live[n.key];
+      out.cost = priceFor(food, e.amount, e.unit);
+      out.missingNutrition = out.cal == null;
+      out.missingCost = out.cost == null;
+      return out;
+    }
     for (const n of NUTRIENTS) {
       const v = e.nutrition?.[n.key];
       if (v != null && v !== '') out[n.key] = Number(v);
@@ -424,54 +437,136 @@ export function rangeTotals(state, from, to) {
   return { days, total, plannedDays: planned, cooks };
 }
 
-// ---------- Saved foods (for quick-add) ----------
+// ---------- Your food list ----------
 
-const norm = (s) => String(s || '').trim().toLowerCase();
+const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+// "Onions, chopped (optional)" -> "onion"
+function simple(s) {
+  let t = norm(s).replace(/\(.*?\)/g, '').split(',')[0].trim();
+  t = t.replace(/^(fresh|large|small|medium|chopped|diced|minced|sliced|dried|raw|cooked)\s+/g, '');
+  if (t.endsWith('ies')) t = `${t.slice(0, -3)}y`;
+  else if (t.endsWith('oes')) t = t.slice(0, -2);
+  else if (t.endsWith('s') && !t.endsWith('ss')) t = t.slice(0, -1);
+  return t;
+}
 
+export const getFood = (state, id) => state.foods.find((f) => f.id === id) || null;
+
+// The food in your list with this name (or a name you linked to it before).
 export function findFood(state, name) {
-  return state.foods.find((f) => norm(f.name) === norm(name)) || null;
+  const n = norm(name);
+  if (!n) return null;
+  const names = (f) => [f.name, ...(f.aliases || [])];
+  let hit = state.foods.find((f) => names(f).some((x) => norm(x) === n));
+  if (hit) return hit;
+  const sn = simple(name);
+  hit = state.foods.find((f) => names(f).some((x) => simple(x) === sn));
+  return hit || null;
 }
 
-// Scales a saved food to the amount asked for, when the units match.
-export function foodFor(state, { name, amount, unit }) {
-  const saved = findFood(state, name);
-  const item = { name: name.trim(), amount, unit: unit || '', nutrition: {}, cost: null };
-  if (!saved) return { item, matched: false };
-  item.name = saved.name;
-  let factor = 1;
-  if (amount == null) {
-    item.amount = saved.amount;
-    item.unit = saved.unit;
-  } else if (saved.amount && norm(saved.unit) === norm(unit)) {
-    factor = amount / saved.amount;
-  } else if (saved.amount && !unit && !saved.unit) {
-    factor = amount / saved.amount;
-  } else {
-    // Different units: keep what was typed, but we can't scale the numbers.
-    return { item, matched: false, saved };
-  }
-  for (const n of NUTRIENTS) {
-    const v = saved.nutrition?.[n.key];
-    if (v != null && v !== '') item.nutrition[n.key] = Math.round(Number(v) * factor * 10) / 10;
-  }
-  if (saved.cost != null && saved.cost !== '') item.cost = Math.round(Number(saved.cost) * factor * 100) / 100;
-  return { item, matched: true };
+// Remember that "ground beef" means this food, so it's found next time.
+export function linkName(food, name) {
+  const n = String(name || '').trim();
+  if (!n || norm(n) === norm(food.name)) return;
+  food.aliases = [...new Set([...(food.aliases || []), n])];
 }
 
-export function rememberFood(state, item) {
-  const existing = findFood(state, item.name);
-  const fields = {
-    name: item.name.trim(),
-    amount: item.amount ?? null,
-    unit: item.unit || '',
-    nutrition: { ...(item.nutrition || {}) },
-    cost: item.cost ?? null,
-    updatedAt: Date.now(),
+// A food for a day, from what was typed: { name, amount, unit } -> entry fields.
+export function foodFor(state, { name, amount, unit }, food = findFood(state, name)) {
+  const item = { name: String(name || '').trim(), amount, unit: unit || '', nutrition: {}, cost: null };
+  if (!food) return { item, matched: false };
+  return { item: entryFromFood(food, amount, unit), matched: true, food };
+}
+
+export function entryFromFood(food, amount, unit) {
+  let qty = amount;
+  let u = unit || '';
+  if (qty == null) ({ qty, unit: u } = defaultAmount(food));
+  const nutrition = nutritionFor(food, qty, u);
+  return {
+    name: food.name,
+    amount: qty,
+    unit: u,
+    foodId: food.id,
+    nutrition: nutrition || {},
+    cost: nutrition ? priceFor(food, qty, u) : null,
+    unconverted: !nutrition || undefined,
   };
-  if (existing) Object.assign(existing, fields);
-  else state.foods.push({ id: uid(), ...fields });
+}
+
+// Adds a food from a lookup to your list (or refreshes the one you already have).
+export function addFood(state, food) {
+  const same = state.foods.find((f) => (food.sourceId && f.source === food.source && f.sourceId === food.sourceId));
+  if (same) {
+    // Keep your price, sizes and section; refresh the numbers.
+    same.nutrition = { ...food.nutrition };
+    same.updatedAt = Date.now();
+    return same;
+  }
+  const f = { id: uid(), price: null, portions: [], aliases: [], ...food, updatedAt: Date.now() };
+  state.foods.push(f);
+  return f;
+}
+
+// Saves numbers typed for a food on a day into your food list.
+export function rememberFood(state, item) {
+  const fresh = foodFromAmount(item);
+  const existing = item.foodId ? getFood(state, item.foodId) : findFood(state, item.name);
+  if (existing && existing.source === 'manual') {
+    Object.assign(existing, { ...fresh, id: existing.id, aliases: existing.aliases, section: existing.section, updatedAt: Date.now() });
+    return existing;
+  }
+  if (existing) return existing; // looked-up foods keep their numbers
+  const f = { ...fresh, id: uid(), aliases: [], updatedAt: Date.now() };
+  state.foods.push(f);
+  return f;
 }
 
 export function recentFoods(state, limit = 12) {
   return state.foods.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
+}
+
+export function deleteFood(state, id) {
+  state.foods = state.foods.filter((f) => f.id !== id);
+  for (const r of state.recipes) for (const i of r.ingredients || []) if (i.foodId === id) delete i.foodId;
+}
+
+// ---------- Recipe totals from its ingredients ----------
+
+// Nutrition and price per portion, worked out from the ingredients that are in your food list.
+export function recipeFromIngredients(state, recipe) {
+  const servings = Math.max(1, Number(recipe.servings) || 1);
+  const total = {};
+  for (const n of NUTRIENTS) total[n.key] = 0;
+  let cost = 0;
+  let priced = 0;
+  const rows = [];
+  for (const ing of recipe.ingredients || []) {
+    if (!String(ing.name || '').trim()) continue;
+    const food = (ing.foodId && getFood(state, ing.foodId)) || findFood(state, ing.name);
+    const qty = ing.qty;
+    const row = { ing, food, nutrition: null, cost: null, problem: '' };
+    if (!food) row.problem = 'not in your food list';
+    else if (qty == null) row.problem = 'no amount';
+    else {
+      row.nutrition = nutritionFor(food, qty, ing.unit);
+      if (!row.nutrition) row.problem = `can't tell how much “${ing.unit || 'one'}” weighs`;
+      else {
+        for (const n of NUTRIENTS) total[n.key] += row.nutrition[n.key] || 0;
+        row.cost = priceFor(food, qty, ing.unit);
+        if (row.cost != null) { cost += row.cost; priced += 1; }
+      }
+    }
+    rows.push(row);
+  }
+  const counted = rows.filter((r) => r.nutrition).length;
+  const perPortion = {};
+  for (const n of NUTRIENTS) perPortion[n.key] = Math.round((total[n.key] / servings) * 10) / 10;
+  return {
+    rows,
+    counted,
+    priced,
+    perPortion,
+    totalCost: priced ? Math.round(cost * 100) / 100 : null,
+  };
 }

@@ -1,6 +1,11 @@
 import { store } from './store.js';
 import { sync } from './sync.js';
 import { initPhotos, photoUrl, savePhoto } from './photos.js';
+import { lookupBarcode, searchFoods } from './lookup.js';
+import { startScanner } from './scanner.js';
+import {
+  SECTIONS, guessSection, normUnit, nutritionFor, perLabel, priceFor,
+} from './foods.js';
 import {
   addDays, dateKey, daysBetween, formatDay, fromKey, monthName, shortDate, shortDay, startOfWeek,
 } from './dates.js';
@@ -10,6 +15,7 @@ import {
   getEntry, ingredientText, leftoversOf, moveEntry, openBatches, parseFoods, parseIngredient, parseQty,
   parseSteps, perServing, rangeTotals, recentFoods, recipeTags, refOf, rememberFood, removeEntry,
   removeEntryRaw, servingsOf, sourceOf, uid, defaultState,
+  addFood, deleteFood, entryFromFood, findFood, getFood, linkName, recipeFromIngredients,
 } from './model.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -29,6 +35,8 @@ const ui = {
   openDays: new Set(),
   search: '',
   sort: 'name',
+  recipesView: 'recipes', // or 'foods'
+  foodSearch: '',
   filter: {}, // groupId -> Set(optionIds)
   filtersOpen: false,
   summaryMode: 'week',
@@ -38,8 +46,8 @@ const ui = {
 
 const top = () => ui.sheets[ui.sheets.length - 1] || null;
 function openSheet(sheet) { ui.sheets.push(sheet); renderSheet(); }
-function closeSheet() { ui.sheets.pop(); renderSheet(); }
-function closeAllSheets() { ui.sheets = []; renderSheet(); }
+function closeSheet() { if (top()?.kind === 'scan') endScan(); ui.sheets.pop(); renderSheet(); }
+function closeAllSheets() { endScan(); ui.sheets = []; renderSheet(); }
 
 // ---------- Formatting ----------
 
@@ -224,7 +232,16 @@ function renderEntry(date, e) {
 
 // ---------- Recipes tab ----------
 
+function recipesSwitch() {
+  return `
+    <div class="seg">
+      <button class="${ui.recipesView !== 'foods' ? 'on' : ''}" data-act="recipes-view" data-view="recipes">Recipes</button>
+      <button class="${ui.recipesView === 'foods' ? 'on' : ''}" data-act="recipes-view" data-view="foods">Foods</button>
+    </div>`;
+}
+
 function renderRecipes() {
+  if (ui.recipesView === 'foods') return renderFoods();
   const list = filterRecipes(S(), { search: ui.search, filter: ui.filter, sort: ui.sort });
   const active = Object.values(ui.filter).reduce((n, s) => n + (s?.size || 0), 0);
   const groups = S().categories;
@@ -233,6 +250,7 @@ function renderRecipes() {
       <h1>Recipes</h1>
       <button class="btn primary" data-act="new-recipe">+ New</button>
     </header>
+    ${recipesSwitch()}
     ${S().recipes.length ? `
       <div class="toolbar">
         <input id="recipe-search" class="search" type="search" placeholder="Search recipes or ingredients" value="${esc(ui.search)}" autocomplete="off" />
@@ -286,6 +304,53 @@ function renderRecipeCard(r) {
         </span>
       </button>
     </li>`;
+}
+
+// ---------- Your food list ----------
+
+function foodFacts(f) {
+  const n = f.nutrition || {};
+  const parts = [];
+  if (n.cal != null) parts.push(`${Math.round(n.cal)} kcal`);
+  if (n.protein != null) parts.push(`${fmtNum(n.protein)} g protein`);
+  return parts.length ? `${parts.join(' · ')} ${perLabel(f)}` : 'No nutrition yet';
+}
+
+function priceText(f) {
+  const p = f.price;
+  if (!p || p.amount == null || p.amount === '') return '';
+  return `${money(Number(p.amount))} for ${[fmtQty(Number(p.qty ?? 1)), p.unit].filter(Boolean).join(' ')}`;
+}
+
+function renderFoods() {
+  const q = ui.foodSearch.trim().toLowerCase();
+  const list = S().foods
+    .filter((f) => !q || `${f.name} ${f.brand || ''} ${(f.aliases || []).join(' ')}`.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return `
+    <header class="page-header">
+      <h1>Foods</h1>
+      <button class="btn primary" data-act="food-add">+ Add</button>
+    </header>
+    ${recipesSwitch()}
+    <p class="hint">Foods you’ve looked up or typed in, with their nutrition, sizes and price. Recipes and quick-adds use these to fill in the numbers.</p>
+    ${S().foods.length ? `
+      <input id="foods-search" class="search spaced" type="search" placeholder="Search your foods" value="${esc(ui.foodSearch)}" autocomplete="off" />
+      ${list.length ? `<ul class="food-list">${list.map((f) => `
+        <li><button class="food-row" data-act="food-edit" data-id="${f.id}">
+          <span class="entry-main">
+            <span class="title">${esc(f.name)}${f.brand ? ` <span class="muted">· ${esc(f.brand)}</span>` : ''}</span>
+            <span class="meta">${esc(foodFacts(f))}${priceText(f) ? ` · ${esc(priceText(f))}` : ''}</span>
+          </span>
+          <span class="badge">${esc(f.section || 'Other')}</span>
+        </button></li>`).join('')}</ul>` : '<p class="empty">No foods match.</p>'}
+    ` : `
+      <div class="card empty-card">
+        <p><strong>No foods yet.</strong></p>
+        <p class="hint flush">Search the free food databases, scan a barcode, or type a food in yourself.</p>
+        <button class="btn primary" data-act="food-add">Add a food</button>
+      </div>`}
+  `;
 }
 
 // ---------- Summary tab ----------
@@ -503,6 +568,13 @@ function renderSettings() {
     </div>
 
     <div class="card">
+      <h2 class="section tight">Food lookup</h2>
+      <p class="hint flush">Plain foods come from USDA. Without a key the app shares a small free allowance (about 30 searches an hour). For more, get a free key at <a class="link" href="https://fdc.nal.usda.gov/api-key-signup" target="_blank" rel="noopener">fdc.nal.usda.gov</a> and paste it here.</p>
+      <label class="field"><span>USDA key (optional)</span>
+        <input type="text" value="${esc(st.usdaKey || '')}" data-setting="usdaKey" autocomplete="off" spellcheck="false" placeholder="Leave empty to use the shared one" /></label>
+    </div>
+
+    <div class="card">
       <h2 class="section tight">Backup</h2>
       <p class="hint flush">A file with all your recipes and plans (photos aren’t included).</p>
       <div class="btn-row">
@@ -542,6 +614,9 @@ function renderSheetInner() {
     food: renderFoodSheet,
     leftovers: renderLeftoversSheet,
     categories: renderCategoriesSheet,
+    'food-search': renderFoodSearch,
+    'food-edit': renderFoodEdit,
+    scan: renderScan,
   }[s.kind](s);
   el.innerHTML = html;
   el.dataset.sheet = s.key;
@@ -659,6 +734,8 @@ function renderRecipeEdit(s) {
   const url = photoUrl(d.photo);
   const cost = parseQty(d.costText ?? (d.cost ?? ''));
   const servings = Math.max(1, Number(d.servings) || 1);
+  const calc = recipeFromIngredients(S(), draftAsRecipe(d));
+  const rowFor = (ing) => calc.rows.find((r) => r.ing.id === ing.id);
   return `
     <div class="sheet">
       ${sheetHeader(d.id ? 'Edit recipe' : 'New recipe', { left: 'Cancel', right: 'Save', rightAct: 'save-recipe' })}
@@ -697,9 +774,10 @@ function renderRecipeEdit(s) {
           <ul class="ed-ings">
             ${d.ingredients.map((i, n) => `
               <li>
-                <input type="text" class="qty" inputmode="decimal" placeholder="Qty" data-bind="ingredients.${n}.qtyText" value="${esc(i.qtyText)}" aria-label="Amount" />
-                <input type="text" class="unit" placeholder="Unit" data-bind="ingredients.${n}.unit" value="${esc(i.unit)}" aria-label="Unit" list="units" />
-                <input type="text" class="name" placeholder="Ingredient" data-bind="ingredients.${n}.name" value="${esc(i.name)}" aria-label="Ingredient" />
+                <input type="text" class="qty" inputmode="decimal" placeholder="Qty" data-bind="ingredients.${n}.qtyText" data-recalc value="${esc(i.qtyText)}" aria-label="Amount" />
+                <input type="text" class="unit" placeholder="Unit" data-bind="ingredients.${n}.unit" data-recalc value="${esc(i.unit)}" aria-label="Unit" list="units" />
+                <input type="text" class="name" placeholder="Ingredient" data-bind="ingredients.${n}.name" data-recalc value="${esc(i.name)}" aria-label="Ingredient" />
+                ${ingStatus(rowFor(i), n)}
                 <button class="icon-btn small" data-act="ed-remove-ing" data-index="${n}" aria-label="Remove">×</button>
               </li>`).join('')}
           </ul>
@@ -733,12 +811,12 @@ function renderRecipeEdit(s) {
 
         <div class="card">
           <h2 class="section tight">Nutrition per portion</h2>
+          ${renderCalcBox(calc)}
           <div class="nutri-inputs">
             ${NUTRIENTS.map((n) => `
               <label class="field"><span>${n.label} (${n.unit})</span>
                 <input type="number" inputmode="decimal" min="0" step="any" data-bind="nutrition.${n.key}" data-num data-optional value="${esc(d.nutrition[n.key] ?? '')}" /></label>`).join('')}
           </div>
-          <p class="hint flush">Automatic lookup from the ingredients comes in the next update.</p>
         </div>
 
         <div class="card">
@@ -758,6 +836,37 @@ function renderRecipeEdit(s) {
     </div>`;
 }
 
+function draftAsRecipe(d) {
+  return {
+    servings: d.servings,
+    ingredients: d.ingredients.map((i) => ({ ...i, qty: parseQty(i.qtyText) })),
+  };
+}
+
+// The small ✓ / Find button next to an ingredient.
+function ingStatus(row, n) {
+  if (!row) return '<span class="ing-status"></span>';
+  if (row.nutrition) {
+    return `<button class="ing-status ok" data-act="ing-find" data-index="${n}" data-tip="${esc(`${row.food.name}: ${Math.round(row.nutrition.cal || 0)} kcal${row.cost != null ? `, ${money(row.cost)}` : ''}`)}" aria-label="Matched: ${esc(row.food.name)}">✓</button>`;
+  }
+  return `<button class="ing-status find" data-act="ing-find" data-index="${n}" data-tip="${esc(row.problem)}" aria-label="Find food">${row.food ? '?' : 'Find'}</button>`;
+}
+
+function renderCalcBox(calc) {
+  const total = calc.rows.length;
+  if (!total) return '';
+  const pp = calc.perPortion;
+  const left = calc.rows.filter((r) => !r.nutrition);
+  return `
+    <div class="calc-box">
+      ${calc.counted ? `
+        <p class="flush-p"><strong>From your ingredients:</strong> ${esc(kcal(pp.cal))} · ${esc(grams(pp.protein))} protein · ${esc(grams(pp.carbs))} carbs · ${esc(grams(pp.fat))} fat a portion${calc.totalCost != null ? `, ${esc(money(calc.totalCost))} for the whole recipe${calc.priced < calc.counted ? ` (only ${calc.priced} of ${calc.counted} ingredients have a price)` : ''}` : ''}.</p>
+        <p class="hint flush">${calc.counted} of ${total} ingredients counted${left.length ? `. Not counted: ${left.map((r) => `${esc(r.ing.name)} (${esc(r.problem)})`).join(', ')}` : ''}.</p>
+        <button class="btn small" data-act="ed-use-calc">Use these numbers</button>`
+        : `<p class="hint flush">Tap <strong>Find</strong> next to an ingredient to look it up. Once they’re matched, the nutrition and price work themselves out.</p>`}
+    </div>`;
+}
+
 function saveRecipe(s) {
   const d = s.draft;
   if (!d.name.trim()) { alert('Give the recipe a name first.'); $('#ed-name')?.focus(); return; }
@@ -774,7 +883,9 @@ function saveRecipe(s) {
     tags: d.tags,
     ingredients: d.ingredients
       .filter((i) => i.name.trim())
-      .map((i) => ({ id: i.id || uid(), qty: parseQty(i.qtyText), unit: (i.unit || '').trim(), name: i.name.trim() })),
+      .map((i) => ({
+        id: i.id || uid(), qty: parseQty(i.qtyText), unit: (i.unit || '').trim(), name: i.name.trim(), ...(i.foodId ? { foodId: i.foodId } : {}),
+      })),
     steps: d.steps.map((x) => x.trim()).filter(Boolean),
     nutrition,
     cost: parseQty(d.costText ?? (d.cost ?? '')),
@@ -880,14 +991,21 @@ function renderAddFood(s) {
       <input id="food-input" type="text" placeholder="e.g. 100 g Cheerios, 200 ml milk" autocomplete="off" enterkeyhint="done" value="${esc(s.foodText || '')}" />
       <button type="submit" class="btn primary">Add</button>
     </form>
-    <p class="hint">Type what you had, with amounts. Separate items with commas. Foods you've added before fill in their nutrition and price.</p>
+    <p class="hint">Type what you had, with amounts. Separate items with commas. Foods in your list fill in by themselves; new ones are looked up.</p>
+    <div class="btn-row">
+      <button class="btn small" data-act="add-search-food">Search foods</button>
+      <button class="btn small" data-act="add-scan">Scan a barcode</button>
+    </div>
     ${foods.length ? `
       <h2 class="section">Your foods</h2>
       <ul class="pick-list">
-        ${foods.map((f) => `<li><button class="pick" data-act="add-saved-food" data-id="${f.id}">
+        ${foods.map((f) => {
+          const amt = entryFromFood(f, null, '');
+          return `<li><button class="pick" data-act="add-saved-food" data-id="${f.id}">
           <span class="entry-main"><span class="title">${esc(f.name)}</span>
-          <span class="meta">${esc([[f.amount != null ? fmtQty(f.amount) : '', f.unit].filter(Boolean).join(' '), f.nutrition?.cal != null ? kcal(f.nutrition.cal) : '', f.cost != null ? money(f.cost) : ''].filter(Boolean).join(' · '))}</span></span>
-        </button></li>`).join('')}
+          <span class="meta">${esc([[fmtQty(amt.amount), amt.unit].filter(Boolean).join(' '), amt.nutrition?.cal != null ? kcal(amt.nutrition.cal) : '', amt.cost != null ? money(amt.cost) : ''].filter(Boolean).join(' · '))}</span></span>
+        </button></li>`;
+        }).join('')}
       </ul>` : ''}
   `;
 }
@@ -895,23 +1013,25 @@ function renderAddFood(s) {
 function addFoods(s, text) {
   const parts = parseFoods(text);
   if (!parts.length) return;
+  // One food we don't know yet: look it up right away.
+  if (parts.length === 1 && !findFood(S(), parts[0].name)) {
+    ui.sheets.pop();
+    openFoodSearch(parts[0].name, { kind: 'quick', date: s.date, slot: s.slot, ...parts[0] });
+    return;
+  }
   const added = [];
   for (const p of parts) {
     const { item, matched } = foodFor(S(), p);
     const e = addEntry(S(), s.date, { type: 'food', slot: s.slot, ...item });
-    added.push({ e, matched });
+    added.push({ e, matched: matched && !item.unconverted });
   }
   store.save();
   ui.sheets.pop();
-  const unmatched = added.filter((a) => !a.matched);
-  if (added.length === 1 && unmatched.length === 1) {
-    openFoodSheet(s.date, unmatched[0].e.id);
-  } else {
-    renderSheet();
-    toast(unmatched.length
-      ? `Added. Tap ${unmatched.length === 1 ? 'the item' : 'items'} marked “Add nutrition” to fill in the numbers.`
-      : `Added ${added.length} item${added.length === 1 ? '' : 's'}`);
-  }
+  renderSheet();
+  const missing = added.filter((a) => !a.matched).length;
+  toast(missing
+    ? `Added. Tap ${missing === 1 ? 'the item' : 'items'} marked “Add nutrition” to look ${missing === 1 ? 'it' : 'them'} up.`
+    : `Added ${added.length} item${added.length === 1 ? '' : 's'}`);
 }
 
 // ----- One planned meal -----
@@ -998,48 +1118,76 @@ function changeEntry(s, fn) {
 
 // ----- Food item (no recipe) -----
 
-function openFoodSheet(date, id) {
+function foodSheetFor(date, id, k = key()) {
   const e = getEntry(S(), date, id);
-  if (!e) return;
-  openSheet({
-    kind: 'food', date, id, key: key(),
+  const food = e?.foodId ? getFood(S(), e.foodId) : null;
+  return {
+    kind: 'food', date, id, key: k,
     draft: {
-      name: e.name || '',
-      amountText: e.amount != null ? fmtQty(e.amount) : '',
-      unit: e.unit || '',
-      nutrition: { ...(e.nutrition || {}) },
-      costText: e.cost != null ? String(e.cost) : '',
+      name: e?.name || '',
+      amountText: e?.amount != null ? fmtQty(e.amount) : '',
+      unit: e?.unit || '',
+      nutrition: { ...(e?.nutrition || {}) },
+      costText: e?.cost != null ? String(e.cost) : '',
       remember: true,
-      slot: e.slot,
+      linked: !!food,
     },
-  });
+  };
+}
+
+function openFoodSheet(date, id) {
+  if (!getEntry(S(), date, id)) return;
+  openSheet(foodSheetFor(date, id));
 }
 
 function renderFoodSheet(s) {
   const d = s.draft;
+  const e = getEntry(S(), s.date, s.id);
+  const food = d.linked && e?.foodId ? getFood(S(), e.foodId) : null;
+  const qty = parseQty(d.amountText);
+  const live = food ? nutritionFor(food, qty, d.unit) : null;
+  const livePrice = food && live ? priceFor(food, qty, d.unit) : null;
   return `
     <div class="sheet">
       ${sheetHeader(shortDay(s.date), { left: 'Cancel', right: 'Save', rightAct: 'save-food' })}
       <div class="sheet-body">
-        <label class="field"><span>Food</span><input type="text" id="food-name" data-bind="name" value="${esc(d.name)}" /></label>
+        ${food ? `<h1 class="recipe-title">${esc(food.name)}</h1>
+          <p class="facts">${esc([food.brand, foodFacts(food)].filter(Boolean).join(' · '))}</p>`
+          : `<label class="field"><span>Food</span><input type="text" id="food-name" data-bind="name" value="${esc(d.name)}" /></label>`}
         <div class="two-col">
-          <label class="field"><span>Amount</span><input type="text" inputmode="decimal" data-bind="amountText" value="${esc(d.amountText)}" placeholder="e.g. 100" /></label>
-          <label class="field"><span>Unit</span><input type="text" data-bind="unit" value="${esc(d.unit)}" placeholder="g, ml, cup…" list="units" /></label>
+          <label class="field"><span>Amount</span><input type="text" inputmode="decimal" data-bind="amountText" ${food ? 'data-recalc' : ''} value="${esc(d.amountText)}" placeholder="e.g. 100" /></label>
+          <label class="field"><span>Unit</span><input type="text" data-bind="unit" ${food ? 'data-recalc' : ''} value="${esc(d.unit)}" placeholder="g, ml, cup…" list="units" /></label>
         </div>
-        <datalist id="units">${['g', 'kg', 'ml', 'l', 'cup', 'tbsp', 'tsp', 'oz', 'lb', 'piece', 'slice'].map((u) => `<option value="${u}">`).join('')}</datalist>
-        <div class="card">
-          <h2 class="section tight">Nutrition for this amount</h2>
-          <div class="nutri-inputs">
-            ${NUTRIENTS.map((n) => `
-              <label class="field"><span>${n.label} (${n.unit})</span>
-                <input type="number" inputmode="decimal" min="0" step="any" data-bind="nutrition.${n.key}" data-num data-optional value="${esc(d.nutrition[n.key] ?? '')}" /></label>`).join('')}
+        <datalist id="units">${['g', 'kg', 'ml', 'l', 'cup', 'tbsp', 'tsp', 'oz', 'lb', 'piece', 'slice', 'serving', ...(food?.portions || []).map((x) => x.unit)].map((u) => `<option value="${esc(u)}">`).join('')}</datalist>
+        ${food ? `
+          <div class="card">
+            ${live ? `
+              <div class="nutri-grid">
+                ${NUTRIENTS.filter((n) => live[n.key] != null).map((n) => `<div class="nutri"><span class="nutri-label">${n.label}</span><strong>${esc(nutrientText(n.key, live[n.key]))}</strong></div>`).join('')}
+                <div class="nutri"><span class="nutri-label">Price</span><strong>${livePrice != null ? esc(money(livePrice)) : '–'}</strong></div>
+              </div>
+              ${livePrice == null ? '<p class="hint flush">Add a price to this food in Recipes → Foods to count its cost.</p>' : ''}`
+              : `<p class="flush-p warn-text">${qty == null ? 'Enter an amount.' : `Can’t tell how much “${esc(d.unit || 'one')}” is. Use g, ml, cup, oz… or add that size to the food.`}</p>`}
           </div>
-          <p class="hint flush">Tip: the label on the package lists these. Automatic lookup comes in the next update.</p>
-        </div>
-        <label class="field"><span>Price for this amount (${esc(S().settings.currency)})</span>
-          <input type="text" inputmode="decimal" data-bind="costText" value="${esc(d.costText)}" placeholder="Optional" /></label>
-        <label class="field row"><input type="checkbox" data-bind="remember" ${d.remember ? 'checked' : ''} />
-          <span>Remember this food, so next time the numbers fill in by themselves</span></label>
+          <div class="btn-row">
+            <button class="btn small" data-act="food-change">Pick another food</button>
+            <button class="btn small" data-act="food-edit" data-id="${food.id}">Edit food</button>
+            <button class="btn small" data-act="food-unlink">Type numbers instead</button>
+          </div>` : `
+          <button class="btn" data-act="food-lookup">Look up nutrition</button>
+          <div class="card">
+            <h2 class="section tight">Nutrition for this amount</h2>
+            <div class="nutri-inputs">
+              ${NUTRIENTS.map((n) => `
+                <label class="field"><span>${n.label} (${n.unit})</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" data-bind="nutrition.${n.key}" data-num data-optional value="${esc(d.nutrition[n.key] ?? '')}" /></label>`).join('')}
+            </div>
+            <p class="hint flush">Tip: the package label lists these.</p>
+          </div>
+          <label class="field"><span>Price for this amount (${esc(S().settings.currency)})</span>
+            <input type="text" inputmode="decimal" data-bind="costText" value="${esc(d.costText)}" placeholder="Optional" /></label>
+          <label class="field row"><input type="checkbox" data-bind="remember" ${d.remember ? 'checked' : ''} />
+            <span>Save to my foods, so next time the numbers fill in by themselves</span></label>`}
         <button class="btn danger wide" data-act="food-remove">Remove from this day</button>
       </div>
     </div>`;
@@ -1049,20 +1197,29 @@ function saveFood(s) {
   const d = s.draft;
   const e = getEntry(S(), s.date, s.id);
   if (!e) { closeSheet(); return; }
-  if (!d.name.trim()) { alert('Give the food a name.'); return; }
-  const nutrition = {};
-  for (const n of NUTRIENTS) {
-    const v = d.nutrition[n.key];
-    if (v != null && v !== '' && Number.isFinite(Number(v))) nutrition[n.key] = Number(v);
+  const food = d.linked && e.foodId ? getFood(S(), e.foodId) : null;
+  if (food) {
+    const fresh = entryFromFood(food, parseQty(d.amountText), d.unit.trim());
+    delete e.unconverted;
+    Object.assign(e, fresh);
+  } else {
+    if (!d.name.trim()) { alert('Give the food a name.'); return; }
+    const nutrition = {};
+    for (const n of NUTRIENTS) {
+      const v = d.nutrition[n.key];
+      if (v != null && v !== '' && Number.isFinite(Number(v))) nutrition[n.key] = Number(v);
+    }
+    delete e.foodId;
+    delete e.unconverted;
+    Object.assign(e, {
+      name: d.name.trim(),
+      amount: parseQty(d.amountText),
+      unit: d.unit.trim(),
+      nutrition,
+      cost: parseQty(d.costText),
+    });
+    if (d.remember && nutrition.cal != null) e.foodId = rememberFood(S(), e).id;
   }
-  Object.assign(e, {
-    name: d.name.trim(),
-    amount: parseQty(d.amountText),
-    unit: d.unit.trim(),
-    nutrition,
-    cost: parseQty(d.costText),
-  });
-  if (d.remember) rememberFood(S(), e);
   ui.sheets.pop();
   store.save();
   renderSheet();
@@ -1132,6 +1289,337 @@ function renderCategoriesSheet() {
         </form>
       </div>
     </div>`;
+}
+
+// ----- Finding a food (your list, or online) -----
+// purpose says what the picked food is for:
+//   { kind: 'quick', date, slot, name, amount, unit }  add it to a day
+//   { kind: 'entry', date, id }                         fill in a food already on a day
+//   { kind: 'ingredient', index }                       link a recipe ingredient (editor below)
+//   { kind: 'library' }                                 just add it to your food list
+
+function openFoodSearch(query, purpose) {
+  const sheet = { kind: 'food-search', query: query || '', purpose, results: null, loading: false, key: key() };
+  openSheet(sheet);
+  if (sheet.query.trim()) runFoodSearch(sheet);
+  else setTimeout(() => $('#fs-query')?.focus({ preventScroll: true }), 50);
+}
+
+async function runFoodSearch(sheet) {
+  const q = sheet.query.trim();
+  if (!q) return;
+  sheet.loading = true;
+  sheet.results = null;
+  renderSheet();
+  const results = await searchFoods(q, { usdaKey: S().settings.usdaKey });
+  if (sheet.query.trim() !== q) return; // a newer search is running
+  sheet.loading = false;
+  sheet.results = results;
+  renderSheet();
+}
+
+function foodPick(f, act, idx, list) {
+  return `<li><button class="pick" data-act="${act}" data-${list === 'mine' ? 'id' : 'index'}="${list === 'mine' ? f.id : idx}" data-list="${list}">
+    <span class="entry-main">
+      <span class="title">${esc(f.name)}</span>
+      <span class="meta">${esc([f.brand, foodFacts(f)].filter(Boolean).join(' · '))}</span>
+    </span>
+  </button></li>`;
+}
+
+function renderFoodSearch(s) {
+  const q = s.query.trim().toLowerCase();
+  const mine = q
+    ? S().foods.filter((f) => `${f.name} ${f.brand || ''} ${(f.aliases || []).join(' ')}`.toLowerCase().includes(q)).slice(0, 8)
+    : [];
+  const r = s.results;
+  const p = s.purpose;
+  const forWhat = p.kind === 'ingredient' ? 'for this ingredient' : p.kind === 'library' ? 'to add to your foods' : '';
+  return `
+    <div class="sheet">
+      ${sheetHeader('Find a food', { left: 'Cancel' })}
+      <div class="sheet-body">
+        <form class="quick-add" data-form="food-search">
+          <input id="fs-query" type="search" placeholder="e.g. chicken thighs, Cheerios" value="${esc(s.query)}" autocomplete="off" enterkeyhint="search" />
+          <button type="submit" class="btn primary">Search</button>
+        </form>
+        <div class="btn-row">
+          <button class="btn small" data-act="scan-open">Scan a barcode</button>
+          <button class="btn small" data-act="fs-manual">Type the numbers myself</button>
+        </div>
+        ${forWhat ? `<p class="hint flush">Pick the closest match ${forWhat}.</p>` : ''}
+        ${mine.length ? `<h2 class="section">Your foods</h2><ul class="pick-list">${mine.map((f) => foodPick(f, 'fs-pick', 0, 'mine')).join('')}</ul>` : ''}
+        ${s.loading ? '<p class="hint center">Searching…</p>' : ''}
+        ${r ? `
+          <h2 class="section">Plain foods <span class="source">USDA</span></h2>
+          ${r.usda.length ? `<ul class="pick-list">${r.usda.map((f, i) => foodPick(f, 'fs-pick', i, 'usda')).join('')}</ul>`
+            : `<p class="hint">${esc(r.usdaError || 'Nothing found.')}</p>`}
+          <h2 class="section">Packaged foods <span class="source">Open Food Facts</span></h2>
+          ${r.off.length ? `<ul class="pick-list">${r.off.map((f, i) => foodPick(f, 'fs-pick', i, 'off')).join('')}</ul>`
+            : `<p class="hint">${esc(r.offError || 'Nothing found.')}</p>`}
+          <p class="hint">Numbers are per 100 g. The app works out the amount you eat.</p>
+        ` : ''}
+        ${!r && !s.loading && !mine.length ? '<p class="hint">Search two free databases: USDA for plain foods (chicken, milk, apples) and Open Food Facts for packaged foods and barcodes. Foods you pick are saved, so they work offline afterwards.</p>' : ''}
+      </div>
+    </div>`;
+}
+
+// Something was picked in the search: save it to your foods and use it.
+function useFood(sheet, food) {
+  const st = S();
+  const f = food.id ? food : addFood(st, food);
+  const p = sheet.purpose;
+  ui.sheets.pop();
+  if (p.kind === 'quick') {
+    if (p.name) linkName(f, p.name);
+    const e = addEntry(st, p.date, { type: 'food', slot: p.slot, ...entryFromFood(f, p.amount, p.unit) });
+    store.save();
+    if (e.unconverted) {
+      openFoodSheet(p.date, e.id);
+      toast(`How much is “${p.unit}”? Change it to g, ml, cup… or add that size to the food.`);
+    } else {
+      renderSheet();
+      toast(`Added ${f.name}`);
+    }
+    return;
+  }
+  if (p.kind === 'entry') {
+    const e = getEntry(st, p.date, p.id);
+    if (e) {
+      linkName(f, e.name);
+      Object.assign(e, entryFromFood(f, e.amount, e.unit));
+      if (!e.unconverted) delete e.unconverted;
+    }
+    store.save();
+    // Refresh the food pop-up underneath with the new numbers.
+    const under = top();
+    if (under?.kind === 'food') ui.sheets[ui.sheets.length - 1] = foodSheetFor(p.date, p.id, under.key);
+    renderSheet();
+    return;
+  }
+  if (p.kind === 'ingredient') {
+    const ed = top();
+    const ing = ed?.draft?.ingredients?.[p.index];
+    if (ing) { ing.foodId = f.id; linkName(f, ing.name); }
+    store.save();
+    renderSheet();
+    return;
+  }
+  store.save();
+  openSheet(foodEditSheet(f));
+  toast('Added to your foods. Add a price and sizes if you like.');
+}
+
+function manualFromSearch(sheet) {
+  const p = sheet.purpose;
+  const st = S();
+  ui.sheets.pop();
+  if (p.kind === 'quick') {
+    const e = addEntry(st, p.date, { type: 'food', slot: p.slot, name: p.name || sheet.query, amount: p.amount, unit: p.unit || '', nutrition: {}, cost: null });
+    store.save();
+    openFoodSheet(p.date, e.id);
+    return;
+  }
+  if (p.kind === 'entry') {
+    const under = top();
+    if (under?.kind === 'food') under.draft.linked = false;
+    renderSheet();
+    return;
+  }
+  const name = (p.kind === 'ingredient' ? top()?.draft?.ingredients?.[p.index]?.name : sheet.query) || sheet.query || '';
+  const f = addFood(st, { name: name.trim() || 'New food', source: 'manual', base: 'g', per: 100, nutrition: {}, portions: [], section: guessSection(name) });
+  if (p.kind === 'ingredient') {
+    const ing = top()?.draft?.ingredients?.[p.index];
+    if (ing) ing.foodId = f.id;
+  }
+  store.save();
+  openSheet(foodEditSheet(f));
+}
+
+// ----- Barcode scanner -----
+
+function renderScan(s) {
+  return `
+    <div class="sheet">
+      ${sheetHeader('Scan a barcode', { left: 'Cancel' })}
+      <div class="sheet-body">
+        <div class="scan-box">
+          <video id="scan-video" playsinline muted></video>
+          <div class="scan-line" aria-hidden="true"></div>
+        </div>
+        <p class="hint flush">${esc(s.status || 'Point the camera at the barcode on the package.')}</p>
+        <form class="quick-add" data-form="barcode">
+          <input id="barcode-input" type="text" inputmode="numeric" placeholder="Or type the barcode number" autocomplete="off" />
+          <button class="btn" type="submit">Look up</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+let stopScan = null;
+function endScan() { if (stopScan) { try { stopScan(); } catch { /* already stopped */ } stopScan = null; } }
+
+async function openScanner(purpose) {
+  const sheet = { kind: 'scan', purpose, key: key(), status: '' };
+  openSheet(sheet);
+  const video = $('#scan-video');
+  if (!navigator.mediaDevices?.getUserMedia) {
+    sheet.status = 'This browser can’t use the camera here. Type the number instead.';
+    renderSheet();
+    return;
+  }
+  try {
+    stopScan = await startScanner(video, (code) => barcodeFound(sheet, code));
+  } catch (e) {
+    sheet.status = e?.name === 'NotAllowedError'
+      ? 'Camera access was blocked. Allow it in Settings → Safari → Camera, or type the number.'
+      : `Couldn’t start the camera${e?.message ? ` (${e.message})` : ''}. Type the number instead.`;
+    if (top() === sheet) renderSheet();
+  }
+}
+
+async function barcodeFound(sheet, code) {
+  endScan();
+  if (top() !== sheet) return;
+  const mine = S().foods.find((f) => f.barcode && f.barcode === String(code).replace(/\D/g, ''));
+  if (mine) { useScanned(sheet, mine); return; }
+  sheet.status = `Found ${code}. Looking it up…`;
+  // Keep the video element: only update the status line.
+  const hint = $('.sheet-body .hint');
+  if (hint) hint.textContent = sheet.status;
+  try {
+    const food = await lookupBarcode(code);
+    if (top() !== sheet) return;
+    if (!food) {
+      sheet.status = `No product with barcode ${code} in Open Food Facts. Search by name, or type the numbers yourself.`;
+      renderSheet();
+      return;
+    }
+    useScanned(sheet, food);
+  } catch {
+    sheet.status = navigator.onLine ? 'Couldn’t look it up right now. Try again in a moment.' : 'You’re offline. Barcode lookup needs a connection.';
+    if (top() === sheet) renderSheet();
+  }
+}
+
+// The scanner sits on top of a search pop-up, or is opened on its own.
+function useScanned(sheet, food) {
+  ui.sheets.pop();
+  const under = top();
+  if (under?.kind === 'food-search') useFood(under, food);
+  else useFood({ purpose: sheet.purpose }, food) ;
+}
+
+// ----- Editing a food in your list -----
+
+function foodEditSheet(f) {
+  const d = JSON.parse(JSON.stringify(f));
+  d.nutrition = d.nutrition || {};
+  d.portions = (d.portions || []).map((x) => ({ ...x }));
+  d.priceAmount = d.price?.amount ?? '';
+  d.priceQty = d.price?.qty != null ? fmtQty(Number(d.price.qty)) : '1';
+  d.priceUnit = d.price?.unit ?? (d.base === 'g' ? 'lb' : '');
+  d.servingQty = d.serving?.qty != null ? fmtQty(Number(d.serving.qty)) : '';
+  d.servingUnit = d.serving?.unit ?? '';
+  return { kind: 'food-edit', id: f.id, draft: d, key: key() };
+}
+
+function renderFoodEdit(s) {
+  const d = s.draft;
+  const isG = !d.base || d.base === 'g';
+  const per = isG ? `per ${d.per || 100} g (or ml)` : `per ${d.per || 1} ${d.base}`;
+  const sourceNote = d.source === 'usda' ? 'From USDA FoodData Central' : d.source === 'off' ? `From Open Food Facts${d.barcode ? ` · barcode ${d.barcode}` : ''}` : 'Typed in by you';
+  const test = d.priceAmount !== '' && parseQty(String(d.priceAmount)) != null
+    ? priceFor({ ...d, price: { amount: parseQty(String(d.priceAmount)), qty: parseQty(d.priceQty) ?? 1, unit: d.priceUnit }, portions: d.portions.map((x) => ({ unit: x.unit, grams: Number(x.grams) })) }, 100, isG ? 'g' : d.base)
+    : null;
+  return `
+    <div class="sheet">
+      ${sheetHeader('Food', { left: 'Cancel', right: 'Save', rightAct: 'food-save' })}
+      <div class="sheet-body">
+        <label class="field"><span>Name</span><input type="text" id="fe-name" data-bind="name" value="${esc(d.name)}" /></label>
+        <label class="field"><span>Brand</span><input type="text" data-bind="brand" value="${esc(d.brand || '')}" placeholder="Optional" /></label>
+        <p class="hint flush">${esc(sourceNote)}</p>
+
+        <div class="card">
+          <h2 class="section tight">Nutrition ${esc(per)}</h2>
+          <div class="nutri-inputs">
+            ${NUTRIENTS.map((n) => `
+              <label class="field"><span>${n.label} (${n.unit})</span>
+                <input type="number" inputmode="decimal" min="0" step="any" data-bind="nutrition.${n.key}" data-num data-optional value="${esc(d.nutrition[n.key] ?? '')}" /></label>`).join('')}
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="section tight">Price</h2>
+          <div class="price-row">
+            <span>${esc(S().settings.currency)}</span>
+            <input type="text" inputmode="decimal" data-bind="priceAmount" data-recalc value="${esc(d.priceAmount)}" placeholder="3.49" aria-label="Price" />
+            <span>for</span>
+            <input type="text" inputmode="decimal" class="short" data-bind="priceQty" data-recalc value="${esc(d.priceQty)}" aria-label="Amount" />
+            <input type="text" class="short" data-bind="priceUnit" data-recalc value="${esc(d.priceUnit)}" placeholder="lb" list="units" aria-label="Unit" />
+          </div>
+          <p class="hint flush">${test != null ? `That’s ${esc(money(test))} per 100 ${isG ? 'g' : d.base}.` : 'What you pay at the store, e.g. 3.49 for 1 gal, or 5.99 for 1 lb.'}</p>
+        </div>
+
+        <div class="card">
+          <h2 class="section tight">Sizes</h2>
+          <p class="hint flush">How much one cup, slice, piece… weighs, so amounts like “2 slices” work.</p>
+          <ul class="edit-list">
+            ${d.portions.map((x, i) => `<li>
+              <span class="muted">1</span>
+              <input type="text" class="short" data-bind="portions.${i}.unit" value="${esc(x.unit)}" placeholder="slice" aria-label="Size" />
+              <span class="muted">=</span>
+              <input type="number" inputmode="decimal" class="short" data-bind="portions.${i}.grams" data-num value="${esc(x.grams)}" aria-label="Grams" />
+              <span class="muted">${isG ? 'g' : esc(d.base)}</span>
+              <button class="icon-btn small" data-act="fe-remove-size" data-index="${i}" aria-label="Remove">×</button>
+            </li>`).join('')}
+          </ul>
+          <button class="btn small" data-act="fe-add-size">+ Size</button>
+          <div class="serving-row">
+            <span>Usual amount</span>
+            <input type="text" inputmode="decimal" class="short" data-bind="servingQty" value="${esc(d.servingQty)}" placeholder="${isG ? '100' : '1'}" aria-label="Usual amount" />
+            <input type="text" class="short" data-bind="servingUnit" value="${esc(d.servingUnit)}" placeholder="${isG ? 'g' : ''}" list="units" aria-label="Unit" />
+          </div>
+          <p class="hint flush">Used when you add it without an amount.</p>
+        </div>
+
+        <label class="field"><span>Store section (for the shopping list)</span>
+          <select data-bind="section">${SECTIONS.map((x) => `<option ${(d.section || 'Other') === x ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+
+        ${(d.aliases || []).length ? `<p class="hint">Also matches: ${d.aliases.map(esc).join(', ')}</p>` : ''}
+        <datalist id="units">${['g', 'kg', 'ml', 'l', 'cup', 'tbsp', 'tsp', 'oz', 'lb', 'gal', 'piece', 'slice', 'can'].map((u) => `<option value="${u}">`).join('')}</datalist>
+        <button class="btn danger wide" data-act="fe-delete">Delete food</button>
+      </div>
+    </div>`;
+}
+
+function saveFoodEdit(s) {
+  const d = s.draft;
+  const f = getFood(S(), s.id);
+  if (!f) { closeSheet(); return; }
+  if (!d.name.trim()) { alert('Give the food a name.'); return; }
+  const nutrition = {};
+  for (const n of NUTRIENTS) {
+    const v = d.nutrition[n.key];
+    if (v != null && v !== '' && Number.isFinite(Number(v))) nutrition[n.key] = Number(v);
+  }
+  const amount = parseQty(String(d.priceAmount));
+  const sq = parseQty(d.servingQty);
+  Object.assign(f, {
+    name: d.name.trim(),
+    brand: (d.brand || '').trim(),
+    nutrition,
+    portions: d.portions
+      .filter((x) => String(x.unit || '').trim() && Number(x.grams) > 0)
+      .map((x) => ({ unit: normUnit(x.unit), grams: Number(x.grams) })),
+    price: amount != null ? { amount, qty: parseQty(d.priceQty) ?? 1, unit: (d.priceUnit || '').trim() } : null,
+    serving: sq != null ? { qty: sq, unit: (d.servingUnit || '').trim() } : null,
+    section: d.section || 'Other',
+    updatedAt: Date.now(),
+  });
+  ui.sheets.pop();
+  store.save();
+  renderSheet();
 }
 
 // ---------- Small helpers ----------
@@ -1437,10 +1925,17 @@ function onClick(e) {
       break;
     }
     case 'new-recipe-from-add': openSheet({ kind: 'recipe-edit', draft: draftFrom(null), key: key() }); break;
+    case 'add-search-food':
+      ui.sheets.pop();
+      openFoodSearch('', { kind: 'quick', date: s.date, slot: s.slot });
+      break;
+    case 'add-scan':
+      ui.sheets.pop();
+      openScanner({ kind: 'quick', date: s.date, slot: s.slot });
+      break;
     case 'add-saved-food': {
-      const f = st.foods.find((x) => x.id === el.dataset.id);
-      const { item } = foodFor(st, { name: f.name, amount: null, unit: '' });
-      addEntry(st, s.date, { type: 'food', slot: s.slot, ...item });
+      const f = getFood(st, el.dataset.id);
+      addEntry(st, s.date, { type: 'food', slot: s.slot, ...entryFromFood(f, null, '') });
       ui.sheets.pop();
       store.save();
       renderSheet();
@@ -1495,6 +1990,70 @@ function onClick(e) {
       renderSheet();
       break;
 
+    // Foods
+    case 'recipes-view': ui.recipesView = el.dataset.view; render(); break;
+    case 'food-add': openFoodSearch('', { kind: 'library' }); break;
+    case 'food-edit': {
+      const f = getFood(st, el.dataset.id);
+      if (f) openSheet(foodEditSheet(f));
+      break;
+    }
+    case 'food-save': saveFoodEdit(s); break;
+    case 'fe-add-size': s.draft.portions.push({ unit: '', grams: '' }); renderSheet(); break;
+    case 'fe-remove-size': s.draft.portions.splice(Number(el.dataset.index), 1); renderSheet(); break;
+    case 'fe-delete': {
+      const f = getFood(st, s.id);
+      if (f && confirm(`Delete “${f.name}” from your foods? Meals already planned keep their numbers.`)) {
+        deleteFood(st, f.id);
+        ui.sheets.pop();
+        store.save();
+        renderSheet();
+      }
+      break;
+    }
+    case 'fs-pick': {
+      const list = el.dataset.list;
+      const food = list === 'mine' ? getFood(st, el.dataset.id) : s.results?.[list]?.[Number(el.dataset.index)];
+      if (food) useFood(s, food);
+      break;
+    }
+    case 'fs-manual': manualFromSearch(s); break;
+    case 'scan-open': openScanner(s.purpose); break;
+    case 'food-change':
+    case 'food-lookup': {
+      const e = getEntry(st, s.date, s.id);
+      if (!e) break;
+      // Keep the amount typed so far.
+      e.amount = parseQty(s.draft.amountText);
+      e.unit = s.draft.unit.trim();
+      openFoodSearch(act === 'food-lookup' ? s.draft.name : e.name, { kind: 'entry', date: s.date, id: s.id });
+      break;
+    }
+    case 'food-unlink': {
+      const e = getEntry(st, s.date, s.id);
+      s.draft.linked = false;
+      s.draft.name = e?.name || s.draft.name;
+      s.draft.nutrition = { ...(e?.nutrition || {}) };
+      s.draft.costText = e?.cost != null ? String(e.cost) : '';
+      s.draft.remember = false;
+      renderSheet();
+      break;
+    }
+    case 'ing-find': {
+      const ing = s.draft.ingredients[Number(el.dataset.index)];
+      if (!ing?.name.trim()) break;
+      openFoodSearch(ing.name.split(',')[0].replace(/\(.*?\)/g, '').trim(), { kind: 'ingredient', index: Number(el.dataset.index) });
+      break;
+    }
+    case 'ed-use-calc': {
+      const calc = recipeFromIngredients(st, draftAsRecipe(s.draft));
+      for (const n of NUTRIENTS) s.draft.nutrition[n.key] = calc.perPortion[n.key];
+      if (calc.totalCost != null) s.draft.costText = String(calc.totalCost);
+      renderSheet();
+      toast('Filled in from the ingredients');
+      break;
+    }
+
     // Categories
     case 'cat-delete-group': {
       const g = st.categories.find((x) => x.id === el.dataset.group);
@@ -1521,6 +2080,18 @@ function onSubmit(e) {
   const kind = form.dataset.form;
   const st = S();
   if (kind === 'sign-in') { syncAuth('in'); return; }
+  if (kind === 'food-search') {
+    const sh = top();
+    sh.query = $('#fs-query').value;
+    $('#fs-query').blur();
+    runFoodSearch(sh);
+    return;
+  }
+  if (kind === 'barcode') {
+    const code = $('#barcode-input').value.replace(/\D/g, '');
+    if (code.length >= 6) barcodeFound(top(), code);
+    return;
+  }
   if (kind === 'add-food') {
     const input = $('#food-input');
     addFoods(top(), input.value);
@@ -1546,7 +2117,20 @@ function onSubmit(e) {
 async function onChange(e) {
   const el = e.target;
   const st = S();
-  if (el.dataset.bind) { bindInput(el); return; }
+  if (el.dataset.bind) {
+    bindInput(el);
+    // A renamed ingredient may be a different food now.
+    const m = el.dataset.bind.match(/^ingredients\.(\d+)\.name$/);
+    if (m) {
+      const ing = top()?.draft?.ingredients?.[Number(m[1])];
+      if (ing?.foodId) {
+        const f = getFood(st, ing.foodId);
+        if (!f || findFood(st, ing.name) !== f) delete ing.foodId;
+      }
+    }
+    if (el.dataset.recalc !== undefined) renderSheet();
+    return;
+  }
   if (el.dataset.file === 'import' && el.files?.[0]) { importData(el.files[0]); return; }
   if (el.dataset.file === 'photo' && el.files?.[0]) {
     const s = top();
@@ -1564,7 +2148,9 @@ async function onChange(e) {
   if (el.id === 'recipe-sort') { ui.sort = el.value; render(); return; }
   if (el.dataset.setting) {
     const k = el.dataset.setting;
-    st.settings[k] = k === 'weekStart' ? Number(el.value) : el.value.trim() || '$';
+    if (k === 'weekStart') st.settings[k] = Number(el.value);
+    else if (k === 'usdaKey') st.settings[k] = el.value.trim();
+    else st.settings[k] = el.value.trim() || '$';
     if (k === 'weekStart') ui.week = startOfWeek(ui.week, st.settings.weekStart);
     store.save();
     return;
@@ -1599,6 +2185,8 @@ function onInput(e) {
   if (el.dataset.bind && el.dataset.rerender !== undefined) { bindInput(el); return; }
   if (el.id === 'recipe-search') { ui.search = el.value; render(); return; }
   if (el.id === 'add-search') { top().search = el.value; renderSheet(); return; }
+  if (el.id === 'fs-query') { top().query = el.value; return; }
+  if (el.id === 'foods-search') { ui.foodSearch = el.value; render(); return; }
   if (el.id === 'food-input') { top().foodText = el.value; return; }
   if (el.id === 'paste-ings') { top().pasteIngs = el.value; return; }
   if (el.id === 'paste-steps') { top().pasteSteps = el.value; }
