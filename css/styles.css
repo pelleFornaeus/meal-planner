@@ -488,3 +488,35 @@ h2.recipe-title { font-size: 20px; }
   .ed-ings .unit { width: 58px; }
   .ed-ings .qty { width: 52px; }
 }
+
+/* ---------- Food lookup ---------- */
+.search.spaced { margin-bottom: 10px; }
+.section .source { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; margin-left: 4px; color: var(--muted); opacity: .8; }
+.food-list { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.food-list li + li { border-top: 1px solid var(--line); }
+.food-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 14px; text-align: left; }
+.food-row:hover { background: color-mix(in srgb, var(--surface-2) 50%, transparent); }
+.food-row .badge { flex: none; }
+.ing-status { flex: none; min-width: 36px; height: 32px; padding: 0 8px; border-radius: 99px; font-size: 13px; font-weight: 600; display: grid; place-items: center; }
+.ing-status.ok { background: var(--green-soft); color: var(--green); }
+.ing-status.find { background: var(--accent-soft); color: var(--accent); }
+.ed-ings .name { min-width: 60px; }
+.calc-box { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.calc-box .btn { align-self: flex-start; background: var(--surface); }
+.price-row, .serving-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 15px; }
+.price-row input, .serving-row input, .edit-list input.short {
+  padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; min-width: 0; width: 88px;
+}
+.price-row input.short, .serving-row input.short { width: 72px; }
+.edit-list input.short { flex: 1 1 60px; width: 60px; }
+.serving-row { margin-top: 6px; }
+.serving-row span { color: var(--muted); font-size: 14px; margin-right: 4px; }
+.warn-text { color: var(--warn); }
+.scan-box { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 4 / 3; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-line { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+@media (max-width: 400px) {
+  .ed-ings li { flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .ed-ings .qty, .ed-ings .unit { flex: 1 1 0; width: auto; }
+  .ed-ings .name { flex: 1 1 100%; order: 5; }
+}
