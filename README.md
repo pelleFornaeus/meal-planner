@@ -32,9 +32,10 @@ Browsers can't read other websites directly, so the app asks a small Supabase fu
 1. In Supabase, open **Edge Functions** and choose **Deploy a new function → Via Editor**.
 2. Name it exactly `recipe-import`.
 3. Delete the sample code and paste in everything from [`supabase/functions/recipe-import/index.ts`](https://raw.githubusercontent.com/pelleFornaeus/meal-planner/main/supabase/functions/recipe-import/index.ts).
-4. Press **Deploy function**. Leave "Verify JWT" on.
+4. Press **Deploy function**.
+5. Open the function's **Settings**, turn **Verify JWT** off, and save. (The function checks the sign-in itself; Supabase's own check doesn't work with this project's newer keys and blocks every request.)
 
-(With the Supabase command line tool instead: `supabase functions deploy recipe-import --project-ref ytxfjvfayvhwoaybyyqp`.)
+(With the Supabase command line tool instead: `supabase functions deploy recipe-import --no-verify-jwt --project-ref ytxfjvfayvhwoaybyyqp`.)
 
 ## For developers
 

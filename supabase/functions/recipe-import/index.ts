@@ -4,7 +4,9 @@
 //   POST { url }    -> { url, ld: [...JSON-LD blocks], meta: { title, image, description }, text }
 //   POST { image }  -> the picture's bytes (so the app can save the recipe photo)
 //
-// Only signed-in users of the app can call it (Supabase checks the sign-in token).
+// Only signed-in users of the app can call it. The function checks the sign-in
+// itself, so turn "Verify JWT" OFF in the function's settings: Supabase's own check
+// doesn't work with the newer project keys and blocks every request before it gets here.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -88,9 +90,19 @@ function pageText(html: string): string {
     .slice(0, 60000);
 }
 
+// Asks Supabase who the sign-in token belongs to.
+async function signedIn(req: Request): Promise<boolean> {
+  const auth = req.headers.get('authorization') || '';
+  const apikey = req.headers.get('apikey') || '';
+  if (!/^Bearer\s+\S+/i.test(auth) || !apikey) return false;
+  const res = await fetch(`${Deno.env.get('SUPABASE_URL')}/auth/v1/user`, { headers: { Authorization: auth, apikey } });
+  return res.ok;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
+  if (!(await signedIn(req))) return json({ error: 'Sign in again' }, 401);
   let body: { url?: string; image?: string };
   try { body = await req.json(); } catch { return json({ error: 'Bad request' }, 400); }
 
