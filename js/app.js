@@ -1066,10 +1066,11 @@ async function importFromUrl(s) {
       res = await importFunction({ url });
     } catch {
       throw new Error(navigator.onLine
-        ? 'Couldn’t reach the import service. If you haven’t set it up yet, see “Recipe import” in the app’s README.'
+        ? 'Couldn’t reach the import service. Check that it’s set up in Supabase with “Verify JWT” turned off (see “Recipe import” in the app’s README).'
         : 'You’re offline.');
     }
     if (res.status === 404) throw new Error('The import service isn’t set up yet. See “Recipe import” in the app’s README for the one-time setup.');
+    if (res.status === 401) throw new Error('The import service didn’t accept your sign-in. Sign out and in again under Settings → Sync, and check that “Verify JWT” is off for the recipe-import function in Supabase.');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`Couldn’t read that page${data.error ? ` (${data.error})` : ''}. Try pasting the recipe text below instead.`);
     const r = fromPage(data);
