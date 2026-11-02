@@ -3,6 +3,7 @@ import { sync } from './sync.js';
 import { initPhotos, photoUrl, savePhoto } from './photos.js';
 import { lookupBarcode, searchFoods } from './lookup.js';
 import { startScanner } from './scanner.js';
+import { fromPage, fromText } from './importer.js';
 import {
   amountText, listText, pruneChecks, setChecked, shoppingList,
 } from './shopping.js';
@@ -255,7 +256,10 @@ function renderRecipes() {
   return `
     <header class="page-header">
       <h1>Recipes</h1>
-      <button class="btn primary" data-act="new-recipe">+ New</button>
+      <div class="btn-row">
+        <button class="btn" data-act="import-recipe">Import</button>
+        <button class="btn primary" data-act="new-recipe">+ New</button>
+      </div>
     </header>
     ${recipesSwitch()}
     ${S().recipes.length ? `
@@ -286,8 +290,11 @@ function renderRecipes() {
     ` : `
       <div class="card empty-card">
         <p><strong>No recipes yet.</strong></p>
-        <p class="hint flush">Add your first recipe with ingredients, steps, a photo, nutrition and price. You can also paste a list of ingredients or steps from a website.</p>
-        <button class="btn primary" data-act="new-recipe">Add a recipe</button>
+        <p class="hint flush">Add your first recipe with ingredients, steps, a photo, nutrition and price, or import one from a recipe website.</p>
+        <div class="btn-row">
+          <button class="btn primary" data-act="new-recipe">Add a recipe</button>
+          <button class="btn" data-act="import-recipe">Import from a link</button>
+        </div>
       </div>`}
   `;
 }
@@ -889,6 +896,7 @@ function renderRecipeEdit(s) {
     <div class="sheet">
       ${sheetHeader(d.id ? 'Edit recipe' : 'New recipe', { left: 'Cancel', right: 'Save', rightAct: 'save-recipe' })}
       <div class="sheet-body">
+        ${d.id ? '' : renderImportCard(s)}
         <label class="field"><span>Name</span>
           <input type="text" id="ed-name" data-bind="name" value="${esc(d.name)}" placeholder="e.g. Chili" autocomplete="off" /></label>
 
@@ -983,6 +991,120 @@ function renderRecipeEdit(s) {
         ${d.id ? '<button class="btn danger wide" data-act="delete-recipe">Delete recipe</button>' : ''}
       </div>
     </div>`;
+}
+
+// ----- Importing a recipe -----
+
+function renderImportCard(s) {
+  return `
+    <div class="card import-card">
+      <h2 class="section tight">Import a recipe</h2>
+      <form class="import-row" data-form="import-url">
+        <input type="url" id="import-url" placeholder="Paste a link to a recipe" value="${esc(s.importUrl || '')}" autocomplete="off" enterkeyhint="go" ${s.importBusy ? 'disabled' : ''} />
+        <button class="btn primary small" type="submit" ${s.importBusy ? 'disabled' : ''}>${s.importBusy ? 'Reading…' : 'Import'}</button>
+      </form>
+      ${s.importError ? `<p class="hint flush error-text">${esc(s.importError)}</p>` : ''}
+      ${s.importDone ? `<p class="hint flush">${esc(s.importDone)}</p>` : ''}
+      <details class="paste"${s.pasteAllOpen ? ' open' : ''}>
+        <summary data-act="toggle-paste-all">Or paste the whole recipe text</summary>
+        <textarea rows="7" id="paste-all" placeholder="Copy the recipe from the page, with its “Ingredients” and “Instructions” headings, and paste it here.">${esc(s.pasteAll || '')}</textarea>
+        <button class="btn small" data-act="import-text">Fill in</button>
+      </details>
+    </div>`;
+}
+
+// Fills the editor from an imported recipe.
+function applyImport(s, r) {
+  const d = s.draft;
+  if (r.name) d.name = r.name;
+  if (r.servings) d.servings = r.servings;
+  if (r.minutes) d.minutes = r.minutes;
+  if (r.ingredients.length) {
+    d.ingredients = r.ingredients.map((i) => ({ id: uid(), qtyText: i.qty != null ? fmtQty(i.qty) : '', unit: i.unit, name: i.name }));
+  }
+  if (r.steps.length) d.steps = r.steps.slice();
+  for (const [k, v] of Object.entries(r.nutrition || {})) d.nutrition[k] = v;
+  if (r.notes && !d.notes) d.notes = r.notes;
+  if (r.source) d.source = r.source;
+  const got = [
+    r.ingredients.length ? `${r.ingredients.length} ingredients` : '',
+    r.steps.length ? `${r.steps.length} steps` : '',
+    Object.keys(r.nutrition || {}).length ? 'nutrition' : '',
+  ].filter(Boolean);
+  s.importDone = got.length ? `Filled in ${got.join(', ')}. Check it over, then save.` : 'Filled in what it could find. Check it over, then save.';
+  s.importError = '';
+}
+
+function hasContent(d) {
+  return d.name.trim() || d.ingredients.some((i) => i.name.trim()) || d.steps.some((x) => x.trim());
+}
+
+async function importFunction(body) {
+  const res = await sync.fileRequest('/functions/v1/recipe-import', {
+    method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+  });
+  return res;
+}
+
+async function importFromUrl(s) {
+  const url = (s.importUrl || '').trim();
+  if (!/^https?:\/\/\S+\.\S+/i.test(url)) { s.importError = 'That doesn’t look like a web address.'; renderSheet(); return; }
+  if (!sync.user) {
+    s.importError = 'Importing from a link needs you to be signed in (Settings → Sync). You can paste the recipe text below instead.';
+    s.pasteAllOpen = true;
+    renderSheet();
+    return;
+  }
+  if (hasContent(s.draft) && !confirm('Replace what’s in the editor with the imported recipe?')) return;
+  s.importBusy = true;
+  s.importError = '';
+  s.importDone = '';
+  renderSheet();
+  try {
+    let res;
+    try {
+      res = await importFunction({ url });
+    } catch {
+      throw new Error(navigator.onLine
+        ? 'Couldn’t reach the import service. If you haven’t set it up yet, see “Recipe import” in the app’s README.'
+        : 'You’re offline.');
+    }
+    if (res.status === 404) throw new Error('The import service isn’t set up yet. See “Recipe import” in the app’s README for the one-time setup.');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`Couldn’t read that page${data.error ? ` (${data.error})` : ''}. Try pasting the recipe text below instead.`);
+    const r = fromPage(data);
+    if (!r) throw new Error('Couldn’t find a recipe on that page. Try pasting the recipe text below instead.');
+    applyImport(s, r);
+    if (r.image) {
+      s.photoBusy = true;
+      renderSheet();
+      try {
+        const img = await importFunction({ image: r.image });
+        if (img.ok) s.draft.photo = await savePhoto(await img.blob());
+      } catch { /* the recipe is still fine without its photo */ }
+      s.photoBusy = false;
+    }
+  } catch (err) {
+    s.importError = err.message;
+    if (/paste/.test(err.message)) s.pasteAllOpen = true;
+  }
+  s.importBusy = false;
+  if (top() === s) renderSheet();
+}
+
+function importFromText(s) {
+  const text = $('#paste-all')?.value || '';
+  const r = fromText(text);
+  if (!r.ingredients.length && !r.steps.length) {
+    s.importError = 'Couldn’t find the “Ingredients” and “Instructions” headings in that text. You can also paste the ingredients and steps separately further down.';
+    renderSheet();
+    return;
+  }
+  if (hasContent(s.draft) && !confirm('Replace what’s in the editor with the pasted recipe?')) return;
+  applyImport(s, r);
+  s.pasteAll = '';
+  s.pasteAllOpen = false;
+  renderSheet();
 }
 
 function draftAsRecipe(d) {
@@ -1879,6 +2001,7 @@ function onClick(e) {
     e.preventDefault();
     if (act === 'toggle-paste-ing') s.pasteIngOpen = !s.pasteIngOpen;
     if (act === 'toggle-paste-steps') s.pasteStepsOpen = !s.pasteStepsOpen;
+    if (act === 'toggle-paste-all') s.pasteAllOpen = !s.pasteAllOpen;
     renderSheet();
     return;
   }
@@ -2051,6 +2174,8 @@ function onClick(e) {
       renderSheet();
       break;
     }
+    case 'import-text': importFromText(s); break;
+    case 'import-recipe': openSheet({ kind: 'recipe-edit', draft: draftFrom(null), key: key() }); setTimeout(() => $('#import-url')?.focus({ preventScroll: true }), 50); break;
     case 'ed-add-ing':
       s.draft.ingredients.push({ id: uid(), qtyText: '', unit: '', name: '' });
       renderSheet();
@@ -2279,6 +2404,13 @@ function onSubmit(e) {
     addFoods(top(), input.value);
     return;
   }
+  if (kind === 'import-url') {
+    const sh = top();
+    sh.importUrl = $('#import-url').value;
+    $('#import-url').blur();
+    importFromUrl(sh);
+    return;
+  }
   if (kind === 'shop-add') {
     const input = $('#shop-extra');
     const name = input.value.trim();
@@ -2388,7 +2520,9 @@ function onInput(e) {
   if (el.id === 'foods-search') { ui.foodSearch = el.value; render(); return; }
   if (el.id === 'food-input') { top().foodText = el.value; return; }
   if (el.id === 'paste-ings') { top().pasteIngs = el.value; return; }
-  if (el.id === 'paste-steps') { top().pasteSteps = el.value; }
+  if (el.id === 'paste-steps') { top().pasteSteps = el.value; return; }
+  if (el.id === 'paste-all') { top().pasteAll = el.value; return; }
+  if (el.id === 'import-url') { top().importUrl = el.value; }
 }
 
 // ---------- Start ----------

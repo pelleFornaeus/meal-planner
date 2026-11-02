@@ -2,6 +2,7 @@
 
 A meal planner that runs in your browser and works offline. Plan the week from your own recipes, and see nutrition and cost per day, week and month.
 
+- **Import recipes.** Paste a link to a recipe page and the app fills in the name, photo, portions, time, ingredients, steps and nutrition (most recipe sites include these for search engines). If a site doesn't work, copy the recipe text from the page and paste it instead. Needs the one-time setup below.
 - **Recipes.** Ingredients, steps, a photo, how many portions it makes, time, nutrition per portion and the total price. Paste a list of ingredients or steps and the app splits it into lines. Change the portions to scale the ingredients.
 - **Categories.** Groups like Meal, Difficulty, Cost and Time, each with its own labels. A recipe can have any number of them. Filter and sort the recipe list by them. Edit the groups in Settings.
 - **Week plan.** Breakfast, lunch, dinner and snacks for each day (rename or add meals in Settings). Tap + to add a recipe or a food.
@@ -23,6 +24,17 @@ Data is saved on each device and works offline. Sign in under **Settings → Syn
 ### Sync setup (one time)
 
 In Supabase, open **SQL Editor**, paste in [`supabase/setup.sql`](supabase/setup.sql) and press **Run**. This creates the `meal_records` table and a private `meal-photos` storage folder. Each account can only see its own data. Then sign in with the account you already use for the to-do app.
+
+### Recipe import setup (one time)
+
+Browsers can't read other websites directly, so the app asks a small Supabase function to fetch the recipe page for it. Only people signed in to the app can use it.
+
+1. In Supabase, open **Edge Functions** and choose **Deploy a new function → Via Editor**.
+2. Name it exactly `recipe-import`.
+3. Delete the sample code and paste in everything from [`supabase/functions/recipe-import/index.ts`](https://raw.githubusercontent.com/pelleFornaeus/meal-planner/main/supabase/functions/recipe-import/index.ts).
+4. Press **Deploy function**. Leave "Verify JWT" on.
+
+(With the Supabase command line tool instead: `supabase functions deploy recipe-import --project-ref ytxfjvfayvhwoaybyyqp`.)
 
 ## For developers
 
