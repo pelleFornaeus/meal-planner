@@ -537,3 +537,9 @@ h2.recipe-title { font-size: 20px; }
 .shop-item.is-done .amount, .shop-item.is-done .meta { opacity: .7; }
 .shop-add { display: flex; gap: 8px; margin-top: 20px; }
 .shop-add .search { flex: 1; }
+
+/* ---------- Recipe import ---------- */
+.import-card { background: var(--accent-soft); border-color: transparent; }
+.import-row { display: flex; gap: 8px; }
+.import-row input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 16px; color: var(--text); }
+.error-text { color: var(--danger); }
