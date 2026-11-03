@@ -3,13 +3,14 @@
 //   r|<recipeId>          a recipe
 //   c|<groupId>           a category group with its options
 //   f|<foodId>            a saved food (for quick-add)
+//   y|<id>                something you have at home (the pantry)
 //   s                     settings
 //   p|<date>|<entryId>    one meal or food on a day
 //   k|<itemKey>           a ticked-off shopping list item
 //   x|<id>                an extra item added to the shopping list by hand
 // Pure functions, so they can be tested without a browser.
 
-const LISTS = { r: 'recipes', c: 'categories', f: 'foods' };
+const LISTS = { r: 'recipes', c: 'categories', f: 'foods', y: 'pantry' };
 
 export function flatten(state) {
   const out = {};
@@ -30,6 +31,7 @@ export function flatten(state) {
 export function applyRecord(state, key, value) {
   const [kind, a, b] = key.split('|');
   if (LISTS[kind]) {
+    if (!state[LISTS[kind]]) state[LISTS[kind]] = [];
     const list = state[LISTS[kind]];
     const i = list.findIndex((x) => x.id === a);
     if (value === undefined) { if (i >= 0) list.splice(i, 1); }

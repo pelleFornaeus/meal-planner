@@ -27,6 +27,18 @@ function singular(name) {
   }).join(' ');
 }
 
+// The shopping-list key for a name (and food, when it's linked to one).
+export function itemKey(state, name, foodId) {
+  const food = (foodId && getFood(state, foodId)) || findFood(state, name);
+  return food ? `f:${food.id}` : `n:${singular(norm(shopName(name)))}`;
+}
+
+// The pantry item that covers a shopping list item, if any.
+export function pantryFor(state, item) {
+  const n = `n:${singular(norm(shopName(item.name)))}`;
+  return (state.pantry || []).find((p) => p.key === item.key || itemKey(state, p.name, p.foodId) === item.key || `n:${singular(norm(shopName(p.name)))}` === n) || null;
+}
+
 // "1 can + 2 cups", or a single total when the units can be added up.
 export function amountText(parts, food) {
   const withQty = parts.filter((p) => p.qty != null && Number.isFinite(p.qty));
@@ -140,14 +152,21 @@ export function shoppingList(state, from, to) {
       parts: it.parts,
       done,
       boughtSome,
+      atHome: null,
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
 
+  // Things you already have at home don't need buying.
+  for (const it of list) {
+    const p = pantryFor(state, it);
+    if (p) it.atHome = p;
+  }
+  const toBuy = list.filter((i) => !i.atHome);
   return {
     items: list,
     recipes: [...recipes.values()].sort((a, b) => a.recipe.name.localeCompare(b.recipe.name)),
-    cost: list.filter((i) => !i.done).reduce((s, i) => s + (i.cost || 0), 0),
-    unpriced: list.filter((i) => !i.done && i.cost == null).length,
+    cost: toBuy.filter((i) => !i.done).reduce((s, i) => s + (i.cost || 0), 0),
+    unpriced: toBuy.filter((i) => !i.done && i.cost == null).length,
   };
 }
 
@@ -174,4 +193,10 @@ export function listText(groups) {
     g.title,
     ...g.items.map((i) => `- ${i.name}${i.amount ? ` (${i.amount})` : ''}`),
   ].join('\n')).join('\n\n');
+}
+
+// Things most kitchens always have, so a new pantry item starts as "always have".
+export function guessStaple(name) {
+  return /\b(salt|pepper|black pepper|olive oil|vegetable oil|oil|flour|sugar|baking (soda|powder)|vinegar|soy sauce|spices?|cumin|paprika|cinnamon|oregano|thyme|chili powder|curry powder|garlic powder|onion powder|stock cubes?|bouillon|honey|ketchup|mustard|mayo(nnaise)?|rice|pasta|water)\b/i.test(String(name || ''))
+    && !/\b(bell|fresh)\b/i.test(String(name || ''));
 }

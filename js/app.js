@@ -5,8 +5,11 @@ import { lookupBarcode, searchFoods } from './lookup.js';
 import { startScanner } from './scanner.js';
 import { fromPage, fromText } from './importer.js';
 import {
-  amountText, listText, pruneChecks, setChecked, shoppingList,
+  amountText, guessStaple, itemKey, listText, pruneChecks, setChecked, shoppingList,
 } from './shopping.js';
+import {
+  clockText, copyWeek, cookDates, lastCooked, pickSurprise, stepTimers,
+} from './extras.js';
 import {
   SECTIONS, guessSection, normUnit, nutritionFor, perLabel, priceFor,
 } from './foods.js';
@@ -45,6 +48,10 @@ const ui = {
   filtersOpen: false,
   shopFrom: null, // first day of the shopping list (default today)
   shopGroup: 'section', // or 'recipe'
+  shopView: 'list', // or 'pantry'
+  atHomeOpen: false,
+  favOnly: false,
+  timers: [], // running kitchen timers
   shopRecipes: new Set(), // show only these recipes ('foods' = foods added to days)
   summaryMode: 'week',
   summaryAnchor: null,
@@ -53,8 +60,13 @@ const ui = {
 
 const top = () => ui.sheets[ui.sheets.length - 1] || null;
 function openSheet(sheet) { ui.sheets.push(sheet); renderSheet(); }
-function closeSheet() { if (top()?.kind === 'scan') endScan(); ui.sheets.pop(); renderSheet(); }
-function closeAllSheets() { endScan(); ui.sheets = []; renderSheet(); }
+function closeSheet() {
+  if (top()?.kind === 'scan') endScan();
+  if (top()?.kind === 'cook') keepScreenOn(false);
+  ui.sheets.pop();
+  renderSheet();
+}
+function closeAllSheets() { endScan(); keepScreenOn(false); ui.sheets = []; renderSheet(); }
 
 // ---------- Formatting ----------
 
@@ -141,6 +153,8 @@ function renderPlan() {
     <div class="days">
       ${daysBetween(from, to).map((d) => renderDay(d, t)).join('')}
     </div>
+    ${Object.keys(S().plan).some((d) => d >= addDays(from, -7) && d < from) ? `
+      <p class="hint center"><button class="link" data-act="copy-week">Copy last week’s meals into this week</button></p>` : ''}
   `;
 }
 
@@ -250,7 +264,7 @@ function recipesSwitch() {
 
 function renderRecipes() {
   if (ui.recipesView === 'foods') return renderFoods();
-  const list = filterRecipes(S(), { search: ui.search, filter: ui.filter, sort: ui.sort });
+  const list = filterRecipes(S(), { search: ui.search, filter: ui.filter, sort: ui.sort, favorites: ui.favOnly });
   const active = Object.values(ui.filter).reduce((n, s) => n + (s?.size || 0), 0);
   const groups = S().categories;
   return `
@@ -266,13 +280,15 @@ function renderRecipes() {
       <div class="toolbar">
         <input id="recipe-search" class="search" type="search" placeholder="Search recipes or ingredients" value="${esc(ui.search)}" autocomplete="off" />
         <select id="recipe-sort" aria-label="Sort">
-          ${[['name', 'A–Z'], ['newest', 'Newest'], ['cost', 'Cheapest'], ['cal', 'Fewest calories'], ['protein', 'Most protein'], ['time', 'Quickest']]
+          ${[['name', 'A–Z'], ['newest', 'Newest'], ['favorite', 'Favourites first'], ['rating', 'Top rated'], ['stale', 'Not made in a while'], ['cost', 'Cheapest'], ['cal', 'Fewest calories'], ['protein', 'Most protein'], ['time', 'Quickest']]
             .map(([v, l]) => `<option value="${v}" ${ui.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>
       </div>
       <div class="filter-bar">
         <button class="chip${ui.filtersOpen || active ? ' on' : ''}" data-act="toggle-filters">Filter${active ? ` (${active})` : ''} ${ui.filtersOpen ? '▾' : '▸'}</button>
+        <button class="chip${ui.favOnly ? ' on' : ''}" data-act="fav-only">★ Favourites</button>
         ${active ? '<button class="link" data-act="clear-filters">Clear</button>' : ''}
+        <button class="chip surprise-chip" data-act="surprise">🎲 Surprise me</button>
       </div>
       ${ui.filtersOpen ? `
         <div class="card filters">
@@ -312,7 +328,8 @@ function renderRecipeCard(r) {
       <button class="recipe-card" data-act="view-recipe" data-id="${r.id}">
         ${thumb(r.photo, 'cover')}
         <span class="recipe-body">
-          <span class="title">${esc(r.name)}</span>
+          <span class="title">${r.favorite ? '<span class="fav-star" aria-label="Favourite">★</span> ' : ''}${esc(r.name)}</span>
+          ${r.rating ? `<span class="stars-small" aria-label="Rated ${r.rating} of 5">${'★'.repeat(r.rating)}<span class="dim">${'★'.repeat(5 - r.rating)}</span></span>` : ''}
           ${facts.length ? `<span class="meta">${esc(facts.join(' · '))}</span>` : ''}
           <span class="badges">${recipeTags(S(), r).slice(0, 4).map(({ option }) => `<span class="badge">${esc(option.name)}</span>`).join('')}</span>
         </span>
@@ -386,7 +403,8 @@ function shopGroups() {
     section: x.section || guessSection(x.name), done: !!x.checked, extra: true,
   }));
   const keep = (i) => !picked.size || i.recipes.some((id) => picked.has(id)) || (picked.has('foods') && i.hasFoods);
-  const items = list.items.filter(keep);
+  const atHome = list.items.filter((i) => i.atHome && keep(i));
+  const items = list.items.filter((i) => !i.atHome && keep(i));
   const shownExtras = picked.size ? [] : extras;
   const order = (a, b) => (a.done - b.done) || a.name.localeCompare(b.name);
   let groups;
@@ -415,7 +433,7 @@ function shopGroups() {
   const visible = [...items, ...shownExtras];
   const open = visible.filter((i) => !i.done);
   return {
-    list, groups, from, to,
+    list, groups, from, to, atHome,
     left: open.length,
     total: visible.length,
     cost: open.reduce((s, i) => s + (i.cost || 0), 0),
@@ -424,6 +442,7 @@ function shopGroups() {
 }
 
 function renderShop() {
+  if (ui.shopView === 'pantry') return renderPantry();
   const st = S();
   const { from, to, days } = shopRange();
   const g = shopGroups();
@@ -434,6 +453,7 @@ function renderShop() {
       <h1>Shopping</h1>
       ${g.total ? '<button class="btn small" data-act="shop-share">Copy list</button>' : ''}
     </header>
+    ${shopSwitch()}
     <div class="card shop-range">
       <div class="shop-range-row">
         <label class="field"><span>From</span><input id="shop-from" type="date" value="${from}" /></label>
@@ -441,7 +461,7 @@ function renderShop() {
       </div>
       <p class="hint flush">${esc(shortDate(from))} – ${esc(shortDate(to))}. Each batch is bought for the day it’s cooked, so leftovers aren’t bought twice.</p>
     </div>
-    <div class="seg">
+    <div class="seg small-seg">
       <button class="${ui.shopGroup !== 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="section">By aisle</button>
       <button class="${ui.shopGroup === 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="recipe">By recipe</button>
     </div>
@@ -461,9 +481,22 @@ function renderShop() {
         <h2 class="section">${esc(grp.title)}${grp.sub ? ` <span class="source">${esc(grp.sub)}</span>` : ''}</h2>
         <ul class="food-list shop-list">${grp.items.map(renderShopItem).join('')}</ul>`).join('')}
     ` : `<div class="card empty-card">
-        <p><strong>Nothing to buy for these days.</strong></p>
+        <p><strong>${g.atHome.length ? 'You have everything at home.' : 'Nothing to buy for these days.'}</strong></p>
         <p class="hint flush">Plan some meals on the Plan tab and their ingredients show up here. You can also add things by hand below.</p>
       </div>`}
+    ${g.atHome.length ? `
+      <details class="at-home"${ui.atHomeOpen ? ' open' : ''}>
+        <summary data-act="toggle-at-home">Already at home (${g.atHome.length})</summary>
+        <ul class="food-list shop-list">${g.atHome.map((i) => `
+          <li class="shop-item is-home">
+            <span class="food-row static">
+              <span class="home-dot" aria-hidden="true">✓</span>
+              <span class="entry-main"><span class="title">${esc(i.name)}${i.amount ? ` <span class="amount">${esc(i.amount)}</span>` : ''}</span>
+              <span class="meta">${esc(i.atHome.staple ? 'You always have this' : `In your pantry${i.atHome.until ? ` · use by ${shortDate(i.atHome.until)}` : ''}`)}</span></span>
+            </span>
+            <button class="btn small" data-act="pantry-need" data-id="${i.atHome.id}">Need it</button>
+          </li>`).join('')}</ul>
+      </details>` : ''}
     <form class="shop-add" data-form="shop-add">
       <input id="shop-extra" class="search" type="text" placeholder="Add an item, like paper towels" autocomplete="off" enterkeyhint="done" />
       <button class="btn primary" type="submit">Add</button>
@@ -489,8 +522,66 @@ function renderShopItem(i) {
         </span>
         ${i.cost != null && !i.share ? `<span class="price">${esc(money(i.cost))}</span>` : ''}
       </button>
-      ${i.extra ? `<button class="icon-btn small" data-act="shop-remove-extra" data-id="${i.extraId}" aria-label="Remove ${esc(i.name)}">×</button>` : ''}
+      ${i.extra ? `<button class="icon-btn small" data-act="shop-remove-extra" data-id="${i.extraId}" aria-label="Remove ${esc(i.name)}">×</button>`
+        : i.done ? '' : `<button class="have-btn" data-act="pantry-have" data-key="${esc(i.key)}" data-name="${esc(i.name)}" data-food="${i.food?.id || ''}" title="I have this at home" aria-label="I have ${esc(i.name)} at home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z"/></svg></button>`}
     </li>`;
+}
+
+function shopSwitch() {
+  const n = (S().pantry || []).length;
+  return `
+    <div class="seg">
+      <button class="${ui.shopView !== 'pantry' ? 'on' : ''}" data-act="shop-view" data-view="list">To buy</button>
+      <button class="${ui.shopView === 'pantry' ? 'on' : ''}" data-act="shop-view" data-view="pantry">At home${n ? ` (${n})` : ''}</button>
+    </div>`;
+}
+
+function renderPantry() {
+  const t = today();
+  const list = (S().pantry || []).slice().sort((a, b) => (b.staple ? 1 : 0) - (a.staple ? 1 : 0) || a.name.localeCompare(b.name));
+  const staples = list.filter((p) => p.staple);
+  const other = list.filter((p) => !p.staple).sort((a, b) => (a.until || '9999').localeCompare(b.until || '9999') || a.name.localeCompare(b.name));
+  const row = (p) => {
+    const soon = p.until && p.until <= addDays(t, 2);
+    return `
+      <li class="shop-item pantry-item">
+        <span class="food-row static">
+          <span class="entry-main">
+            <span class="title">${esc(p.name)}</span>
+            <span class="meta">
+              <label class="mini-toggle"><input type="checkbox" data-pantry-staple="${p.id}" ${p.staple ? 'checked' : ''} /> Always have</label>
+              ${p.staple ? '' : `<label class="mini-date${soon ? ' soon' : ''}">Use by <input type="date" data-pantry-until="${p.id}" value="${esc(p.until || '')}" /></label>`}
+            </span>
+          </span>
+        </span>
+        <button class="icon-btn small" data-act="pantry-remove" data-id="${p.id}" aria-label="Used up: remove ${esc(p.name)}">×</button>
+      </li>`;
+  };
+  return `
+    <header class="page-header"><h1>Shopping</h1></header>
+    ${shopSwitch()}
+    <p class="hint">Things you have at home are left off the shopping list. Tick <strong>Always have</strong> for staples like salt and oil. Add a <strong>use by</strong> date and the app suggests recipes to use it up.</p>
+    <form class="shop-add top" data-form="pantry-add">
+      <input id="pantry-name" class="search" type="text" placeholder="Add something you have, like rice" autocomplete="off" enterkeyhint="done" />
+      <button class="btn primary" type="submit">Add</button>
+    </form>
+    ${list.length ? `
+      ${staples.length ? `<h2 class="section">Always have</h2><ul class="food-list shop-list">${staples.map(row).join('')}</ul>` : ''}
+      ${other.length ? `<h2 class="section">In the pantry and fridge</h2><ul class="food-list shop-list">${other.map(row).join('')}</ul>` : ''}
+    ` : '<p class="empty">Nothing here yet. You can also tap the house button next to an item on the shopping list.</p>'}
+  `;
+}
+
+function addToPantry(name, foodId = '', fields = {}) {
+  const st = S();
+  const clean = name.trim();
+  if (!clean) return null;
+  const key = itemKey(st, clean, foodId);
+  const ex = st.pantry.find((p) => p.key === key || p.name.toLowerCase() === clean.toLowerCase());
+  if (ex) return ex;
+  const item = { id: uid(), name: clean, key, ...(foodId ? { foodId } : {}), staple: guessStaple(clean), until: null, addedAt: today(), ...fields };
+  st.pantry.push(item);
+  return item;
 }
 
 async function shareShopList() {
@@ -773,6 +864,8 @@ function renderSheetInner() {
     'food-search': renderFoodSearch,
     'food-edit': renderFoodEdit,
     scan: renderScan,
+    cook: renderCookSheet,
+    surprise: renderSurprise,
   }[s.kind](s);
   el.innerHTML = html;
   el.dataset.sheet = s.key;
@@ -809,13 +902,19 @@ function renderRecipeView(s) {
       ${sheetHeader('', { right: 'Edit', rightAct: 'edit-recipe' })}
       <div class="sheet-body">
         ${url ? `<img class="hero" src="${esc(url)}" alt="" />` : ''}
-        <h1 class="recipe-title">${esc(r.name)}</h1>
+        <div class="title-row">
+          <h1 class="recipe-title">${esc(r.name)}</h1>
+          <button class="fav-btn${r.favorite ? ' on' : ''}" data-act="toggle-fav" data-id="${r.id}" aria-pressed="${!!r.favorite}" aria-label="Favourite">${r.favorite ? '★' : '☆'}</button>
+        </div>
+        ${starsInput(r)}
         <div class="badges">${recipeTags(S(), r).map(({ option }) => `<span class="badge">${esc(option.name)}</span>`).join('')}</div>
         <p class="facts">${[
           `Makes ${base} portion${base === 1 ? '' : 's'}`,
           r.minutes ? `${r.minutes} min` : '',
           r.cost != null && r.cost !== '' ? `${money(Number(r.cost))} in total (${money(cps)} a portion)` : '',
         ].filter(Boolean).map(esc).join(' · ')}</p>
+        ${cookedLine(r)}
+        ${r.steps?.length ? `<button class="btn primary wide cook-start" data-act="cook-start">Start cooking</button>` : ''}
 
         <div class="card">
           <h2 class="section tight">Plan it</h2>
@@ -850,11 +949,208 @@ function renderRecipeView(s) {
         ${r.steps?.length ? `
         <div class="card">
           <h2 class="section tight">Steps</h2>
-          <ol class="step-list">${r.steps.map((st) => `<li>${esc(st)}</li>`).join('')}</ol>
+          <ol class="step-list">${r.steps.map((st) => `<li>${esc(st)}${timerButtons(st, r.name)}</li>`).join('')}</ol>
         </div>` : ''}
 
         ${r.notes ? `<div class="card"><h2 class="section tight">Notes</h2><p class="notes">${esc(r.notes)}</p></div>` : ''}
         ${r.source ? `<p class="hint">Source: <a class="link" href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60))}</a></p>` : ''}
+      </div>
+    </div>`;
+}
+
+function starsInput(r, act = 'rate') {
+  const n = r.rating || 0;
+  return `<div class="stars" role="group" aria-label="Your rating">${[1, 2, 3, 4, 5].map((i) => `<button class="star${i <= n ? ' on' : ''}" data-act="${act}" data-id="${r.id}" data-stars="${i}" aria-label="${i} star${i === 1 ? '' : 's'}">★</button>`).join('')}</div>`;
+}
+
+function cookedLine(r) {
+  const dates = cookDates(S(), r.id, today());
+  if (!dates.length) return '<p class="hint flush">Not cooked yet.</p>';
+  const last = dates[dates.length - 1];
+  const ago = Math.round((Date.parse(`${today()}T12:00:00Z`) - Date.parse(`${last}T12:00:00Z`)) / 86400000);
+  return `<p class="hint flush">Cooked ${dates.length} time${dates.length === 1 ? '' : 's'} · last ${ago === 0 ? 'today' : ago === 1 ? 'yesterday' : `${ago} days ago`}</p>`;
+}
+
+function timerButtons(step, recipeName) {
+  const ts = stepTimers(step);
+  if (!ts.length) return '';
+  return `<span class="step-timers">${ts.map((t) => `<button class="timer-btn" data-act="timer-start" data-seconds="${t.seconds}" data-label="${esc(`${recipeName}: ${t.label}`)}">⏱ ${esc(clockText(t.seconds))}</button>`).join('')}</span>`;
+}
+
+// ----- Cooking mode -----
+
+function renderCookSheet(s) {
+  const r = findRecipe(S(), s.id);
+  if (!r) return `<div class="sheet">${sheetHeader('')}<div class="sheet-body"><p class="empty">This recipe was deleted.</p></div></div>`;
+  const steps = r.steps || [];
+  const i = Math.min(s.step || 0, steps.length);
+  const done = i >= steps.length;
+  const factor = (s.servings || servingsOf(r)) / servingsOf(r);
+  return `
+    <div class="sheet cook-sheet">
+      ${sheetHeader(done ? 'Done!' : `Step ${i + 1} of ${steps.length}`, { left: 'Close' })}
+      <div class="sheet-body">
+        <div class="cook-progress"><span style="width:${Math.round((i / Math.max(1, steps.length)) * 100)}%"></span></div>
+        <details class="paste cook-ings"${s.ingsOpen ? ' open' : ''}>
+          <summary data-act="toggle-cook-ings">Ingredients${factor !== 1 ? ` (for ${s.servings} portions)` : ''}</summary>
+          <ul class="ing-list">${(r.ingredients || []).map((g) => `<li>${esc(ingredientText(g, factor))}</li>`).join('')}</ul>
+        </details>
+        ${done ? `
+          <div class="cook-done">
+            <p class="cook-step">Enjoy your ${esc(r.name)}!</p>
+            <p class="hint center">How was it?</p>
+            <div class="center-row">${starsInput(r)}</div>
+          </div>` : `
+          <p class="cook-step">${esc(steps[i])}</p>
+          ${timerButtons(steps[i], r.name).replace('step-timers', 'step-timers big')}`}
+        <div class="cook-nav">
+          <button class="btn" data-act="cook-step" data-delta="-1" ${i === 0 ? 'disabled' : ''}>‹ Back</button>
+          ${done ? '<button class="btn primary" data-act="sheet-close">Finish</button>' : `<button class="btn primary" data-act="cook-step" data-delta="1">${i === steps.length - 1 ? 'Finish' : 'Next ›'}</button>`}
+        </div>
+        ${s.wakeLock === false ? '<p class="hint center">Your screen may turn off while cooking on this device.</p>' : ''}
+      </div>
+    </div>`;
+}
+
+let wakeLock = null;
+async function keepScreenOn(on, s) {
+  try {
+    if (on && 'wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      if (s) s.wakeLock = true;
+    } else if (on && s) s.wakeLock = false;
+    if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { if (s) s.wakeLock = false; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && ui.sheets.some((x) => x.kind === 'cook')) keepScreenOn(true);
+});
+
+// ----- Kitchen timers -----
+
+function startTimer(seconds, label) {
+  ui.timers.push({ id: uid(), label, total: seconds, end: Date.now() + seconds * 1000, done: false });
+  renderTimers();
+  ensureTick();
+  unlockSound();
+}
+
+let tick = null;
+function ensureTick() {
+  if (tick) return;
+  tick = setInterval(() => {
+    let rang = false;
+    for (const t of ui.timers) {
+      if (!t.done && !t.paused && t.end <= Date.now()) { t.done = true; rang = true; }
+    }
+    if (rang) ring();
+    renderTimers();
+    if (!ui.timers.length) { clearInterval(tick); tick = null; }
+  }, 500);
+}
+
+function renderTimers() {
+  let el = $('#timers');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'timers';
+    el.className = 'timers';
+    document.body.appendChild(el);
+  }
+  el.hidden = !ui.timers.length;
+  el.innerHTML = ui.timers.map((t) => {
+    const left = t.paused ? t.left : Math.max(0, (t.end - Date.now()) / 1000);
+    return `
+      <div class="timer${t.done ? ' ringing' : ''}">
+        <span class="timer-label">${esc(t.label)}</span>
+        <strong class="timer-clock">${t.done ? 'Done!' : esc(clockText(Math.ceil(left)))}</strong>
+        ${t.done ? '' : `<button class="link" data-act="timer-pause" data-id="${t.id}">${t.paused ? 'Resume' : 'Pause'}</button>`}
+        <button class="icon-btn small" data-act="timer-stop" data-id="${t.id}" aria-label="${t.done ? 'Dismiss' : 'Cancel timer'}">×</button>
+      </div>`;
+  }).join('');
+}
+
+let audio = null;
+function unlockSound() {
+  try {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch { /* no sound on this device */ }
+}
+function ring() {
+  try { navigator.vibrate?.([300, 150, 300, 150, 300]); } catch { /* not supported */ }
+  if (!audio) return;
+  for (let k = 0; k < 3; k++) {
+    const o = audio.createOscillator();
+    const g = audio.createGain();
+    o.frequency.value = 880;
+    o.connect(g); g.connect(audio.destination);
+    const at = audio.currentTime + k * 0.5;
+    g.gain.setValueAtTime(0.001, at);
+    g.gain.exponentialRampToValueAtTime(0.4, at + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, at + 0.35);
+    o.start(at); o.stop(at + 0.4);
+  }
+}
+
+// ----- Surprise me -----
+
+function surprisePool(s) {
+  if (s.date) {
+    // From a meal on the plan: recipes tagged for that meal, if any.
+    const all = S().recipes;
+    const forSlot = all.filter((r) => guessSlot(r) === s.slot);
+    return forSlot.length ? forSlot : all;
+  }
+  return filterRecipes(S(), { search: ui.search, filter: ui.filter, favorites: ui.favOnly });
+}
+
+function spin(s) {
+  const pool = surprisePool(s);
+  const pick = pickSurprise(pool, S(), today(), { exclude: s.seen });
+  if (!pick) { s.pick = null; renderSheet(); return; }
+  s.seen = [...(s.seen || []), pick.id].slice(-Math.max(1, pool.length - 1));
+  s.spinning = true;
+  s.pick = pick.id;
+  let n = 0;
+  renderSheet();
+  clearInterval(spin.t);
+  spin.t = setInterval(() => {
+    const el = $('#spin-name');
+    if (!el) { clearInterval(spin.t); return; }
+    el.textContent = pool[Math.floor(Math.random() * pool.length)].name;
+    if (++n > 12) {
+      clearInterval(spin.t);
+      s.spinning = false;
+      if (top() === s) renderSheet();
+    }
+  }, 70);
+}
+
+function renderSurprise(s) {
+  const r = s.pick && findRecipe(S(), s.pick);
+  const ps = r ? perServing(r) : {};
+  const cps = r ? costPerServing(r) : null;
+  const last = r ? lastCooked(S(), r.id, today()) : null;
+  return `
+    <div class="sheet">
+      ${sheetHeader('Surprise me')}
+      <div class="sheet-body surprise">
+        ${!r ? '<p class="empty">No recipes to pick from. Add some recipes, or clear the filters.</p>' : s.spinning ? `
+          <div class="spin-box"><span class="spin-die" aria-hidden="true">🎲</span><p id="spin-name" class="spin-name">${esc(r.name)}</p></div>` : `
+          ${r.photo && photoUrl(r.photo) ? `<img class="hero" src="${esc(photoUrl(r.photo))}" alt="" />` : '<div class="spin-box"><span class="spin-die done" aria-hidden="true">🎲</span></div>'}
+          <h1 class="recipe-title center">${esc(r.name)}</h1>
+          <p class="facts center">${esc([
+            r.minutes ? `${r.minutes} min` : '',
+            ps.cal != null && ps.cal !== '' ? kcal(ps.cal) : '',
+            cps != null ? `${money(cps)} a portion` : '',
+            last ? `last made ${shortDate(last)}` : 'never made',
+          ].filter(Boolean).join(' · '))}</p>
+          <div class="btn-row center-row">
+            <button class="btn" data-act="surprise-again">Spin again</button>
+            ${s.date ? `<button class="btn primary" data-act="surprise-add">Add to ${esc(shortDay(s.date))}</button>`
+              : `<button class="btn primary" data-act="view-recipe" data-id="${r.id}">Open recipe</button>`}
+          </div>`}
       </div>
     </div>`;
 }
@@ -1218,7 +1514,10 @@ function renderAddRecipe(s) {
             <span class="meta">${fmtQty(b.left)} portion${b.left === 1 ? '' : 's'} left · cooked ${esc(formatDay(b.date, today()))}</span></span>
           </button></li>`).join('')}
       </ul>` : ''}
-    <input id="add-search" class="search" type="search" placeholder="Search recipes" value="${esc(s.search || '')}" autocomplete="off" />
+    <div class="toolbar">
+      <input id="add-search" class="search" type="search" placeholder="Search recipes" value="${esc(s.search || '')}" autocomplete="off" />
+      ${S().recipes.length > 1 ? '<button class="btn" data-act="surprise-slot">🎲</button>' : ''}
+    </div>
     ${list.length ? `
       <ul class="pick-list">
         ${list.map((r) => {
@@ -1363,6 +1662,12 @@ function renderEntrySheet(s) {
         </div>
 
         ${batch}
+
+        ${r && e.type === 'cook' && s.date <= today() ? `
+        <div class="card">
+          <h2 class="section tight">How was it?</h2>
+          ${starsInput(r)}
+        </div>` : ''}
 
         <div class="card">
           <h2 class="section tight">Move</h2>
@@ -2003,6 +2308,8 @@ function onClick(e) {
     if (act === 'toggle-paste-ing') s.pasteIngOpen = !s.pasteIngOpen;
     if (act === 'toggle-paste-steps') s.pasteStepsOpen = !s.pasteStepsOpen;
     if (act === 'toggle-paste-all') s.pasteAllOpen = !s.pasteAllOpen;
+    if (act === 'toggle-at-home') { ui.atHomeOpen = !ui.atHomeOpen; render(); return; }
+    if (act === 'toggle-cook-ings') s.ingsOpen = !s.ingsOpen;
     renderSheet();
     return;
   }
@@ -2048,6 +2355,62 @@ function onClick(e) {
       break;
     }
     case 'categories': openSheet({ kind: 'categories', key: key() }); break;
+    case 'fav-only': ui.favOnly = !ui.favOnly; render(); break;
+    case 'surprise': { const sh = { kind: 'surprise', key: key(), seen: [] }; openSheet(sh); spin(sh); break; }
+    case 'surprise-slot': { const sh = { kind: 'surprise', key: key(), seen: [], date: s.date, slot: s.slot }; openSheet(sh); spin(sh); break; }
+    case 'surprise-again': spin(s); break;
+    case 'surprise-add': {
+      const id = s.pick;
+      ui.sheets.pop(); // the surprise
+      const add = top();
+      if (add?.kind === 'add') {
+        if (openBatches(st, id, add.date).length) { add.choose = id; renderSheet(); break; }
+        ui.sheets.pop();
+      }
+      addRecipeToDay(s.date, s.slot, id);
+      renderSheet();
+      break;
+    }
+    case 'toggle-fav': {
+      const r = findRecipe(st, el.dataset.id);
+      if (r) { r.favorite = !r.favorite; store.save(); }
+      break;
+    }
+    case 'rate': {
+      const r = findRecipe(st, el.dataset.id);
+      if (r) {
+        const n = Number(el.dataset.stars);
+        r.rating = r.rating === n ? 0 : n;
+        store.save();
+        if (r.rating) toast(`Rated ${r.rating} star${r.rating === 1 ? '' : 's'}`);
+      }
+      break;
+    }
+    case 'cook-start': {
+      const sh = { kind: 'cook', id: s.id, servings: s.servings, step: 0, key: key() };
+      openSheet(sh);
+      keepScreenOn(true, sh).then(() => { if (top() === sh) renderSheet(); });
+      break;
+    }
+    case 'cook-step': s.step = Math.max(0, (s.step || 0) + Number(el.dataset.delta)); renderSheet(); $('.sheet-body')?.scrollTo(0, 0); break;
+    case 'timer-start': startTimer(Number(el.dataset.seconds), el.dataset.label); toast(`Timer started: ${clockText(Number(el.dataset.seconds))}`); break;
+    case 'timer-stop': ui.timers = ui.timers.filter((t) => t.id !== el.dataset.id); renderTimers(); break;
+    case 'timer-pause': {
+      const t = ui.timers.find((x) => x.id === el.dataset.id);
+      if (!t) break;
+      if (t.paused) { t.end = Date.now() + t.left * 1000; t.paused = false; } else { t.left = Math.max(0, (t.end - Date.now()) / 1000); t.paused = true; }
+      renderTimers();
+      break;
+    }
+    case 'copy-week': {
+      const from = ui.week;
+      const has = daysBetween(from, addDays(from, 6)).some((d) => dayEntries(st, d).length);
+      if (has && !confirm('This week already has meals. Add last week’s meals on top of them?')) break;
+      const n = copyWeek(st, addDays(from, -7), from);
+      store.save();
+      toast(`Copied ${n} meal${n === 1 ? '' : 's'} from last week`);
+      break;
+    }
 
     // Shopping list
     case 'shop-group': ui.shopGroup = el.dataset.group; render(); break;
@@ -2081,6 +2444,19 @@ function onClick(e) {
     case 'shop-remove-extra': st.shopping.extras = st.shopping.extras.filter((x) => x.id !== el.dataset.id); store.save(); break;
     case 'shop-clear-extras': st.shopping.extras = st.shopping.extras.filter((x) => !x.checked); store.save(); break;
     case 'shop-share': shareShopList(); break;
+    case 'shop-view': ui.shopView = el.dataset.view; render(); break;
+    case 'pantry-have': {
+      const p = addToPantry(el.dataset.name, el.dataset.food);
+      if (p) p.key = el.dataset.key;
+      store.save();
+      toast(`${el.dataset.name} is at home, so it's off the list`);
+      break;
+    }
+    case 'pantry-need':
+    case 'pantry-remove':
+      st.pantry = st.pantry.filter((p) => p.id !== el.dataset.id);
+      store.save();
+      break;
 
     // Summary tab
     case 'summary-mode': ui.summaryMode = el.dataset.mode; render(); break;
@@ -2412,6 +2788,14 @@ function onSubmit(e) {
     importFromUrl(sh);
     return;
   }
+  if (kind === 'pantry-add') {
+    const input = $('#pantry-name');
+    for (const name of input.value.split(/[,;\n]+/)) addToPantry(name);
+    input.value = '';
+    store.save();
+    $('#pantry-name')?.focus({ preventScroll: true });
+    return;
+  }
   if (kind === 'shop-add') {
     const input = $('#shop-extra');
     const name = input.value.trim();
@@ -2471,6 +2855,16 @@ async function onChange(e) {
     return;
   }
   if (el.id === 'recipe-sort') { ui.sort = el.value; render(); return; }
+  if (el.dataset.pantryStaple) {
+    const p = st.pantry.find((x) => x.id === el.dataset.pantryStaple);
+    if (p) { p.staple = el.checked; store.save(); }
+    return;
+  }
+  if (el.dataset.pantryUntil) {
+    const p = st.pantry.find((x) => x.id === el.dataset.pantryUntil);
+    if (p) { p.until = el.value || null; store.save(); }
+    return;
+  }
   if (el.id === 'shop-from') { ui.shopFrom = el.value || null; render(); return; }
   if (el.id === 'shop-days') {
     const n = Math.max(1, Math.min(31, Math.round(Number(el.value)) || 7));
@@ -2534,6 +2928,12 @@ document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && top()) closeSheet();
+  const c = top();
+  if (c?.kind === 'cook' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
+    const steps = findRecipe(S(), c.id)?.steps?.length || 0;
+    c.step = Math.max(0, Math.min(steps, (c.step || 0) + (e.key === 'ArrowRight' ? 1 : -1)));
+    renderSheet();
+  }
 });
 
 store.subscribe(() => {
