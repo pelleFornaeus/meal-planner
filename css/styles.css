@@ -627,3 +627,18 @@ h2.recipe-title { font-size: 20px; }
 .receipt-row select { padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; }
 .receipt-row .price-row input { width: 80px; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; }
 .card.center { text-align: center; align-items: stretch; }
+
+/* ---------- Auto-plan and use it up ---------- */
+.plan-tools { display: flex; justify-content: flex-end; gap: 8px; margin: 0 0 10px; }
+.use-up { background: var(--green-soft); border-color: transparent; }
+.use-up .pick-list { margin: 0; }
+.ap-day { padding: 8px 2px; border-top: 1px solid var(--line); }
+.ap-day .mini-list { margin: 4px 0 0; }
+
+/* ---------- Year in food ---------- */
+.year-hero { align-items: center; text-align: center; background: var(--accent-soft); border-color: transparent; }
+.year-hero .hero.small { width: 100%; }
+.year-dish { font-size: 28px; letter-spacing: -0.02em; }
+.year-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 12px; }
+.rank { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.icon-btn:disabled { opacity: .3; }

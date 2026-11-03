@@ -18,6 +18,9 @@ A meal planner that runs in your browser and works offline. Plan the week from y
 - **Copy last week.** One tap at the bottom of the Plan tab repeats last week's meals.
 - **Price history.** Every time a food's price changes, the old one is kept. The food shows a small chart of its price over time, and the Foods list marks foods that went up or down.
 - **Receipt scanning.** Under **Recipes → Foods** (or at the bottom of the Shop tab), take a photo of a grocery receipt. The app reads it on your phone, matches each line to one of your foods and updates the prices. It remembers your matches for next time. You can also paste receipt text.
+- **Auto-plan my week.** On the Plan tab, pick the days and meals and the app fills the empty ones. It picks favourites and dishes you haven't had in a while, recipes that share ingredients (less waste), and things from your pantry that need using. It plans leftovers from big batches and fits your calorie goal and budget. Shuffle until you like it, then add it to the plan.
+- **Use it up.** Give pantry items a use-by date and the Plan tab suggests recipes that use them before they go off.
+- **Year in food.** Summary → Year in food: your dish of the year, meals and batches cooked, money spent each month, favourite ingredients, top rated, and the new recipes you tried.
 - **Totals.** Each day shows calories, protein and cost; tap it for carbs, fat, sugar, fiber and your daily goals. The Summary tab shows cost and nutrition per week or month, with charts.
 
 ## Install on iPhone
@@ -58,6 +61,7 @@ npm test    # runs the logic tests (Node 20+)
 - `js/lookup.js`: the online searches; `js/scanner.js`: barcode scanning (ZXing in `js/vendor`, Apache 2.0, loaded only when scanning)
 - `js/receipt.js`: price history and reading receipts; `js/ocr.js`: reading text from a photo with Tesseract (`js/vendor/tesseract`, Apache 2.0, loaded only when scanning a receipt)
 - `js/extras.js`: copy a week, last cooked, Surprise me, timers in steps
+- `js/planner.js`: auto-plan and Use it up; `js/recap.js`: Year in food
 - `js/app.js`: the interface
 - `js/store.js`: saving to the browser
 - `js/records.js`, `js/sync.js`: syncing through Supabase, one record per recipe, category group, saved food or planned meal. The newest change to each record wins.

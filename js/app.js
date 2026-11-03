@@ -8,6 +8,8 @@ import {
   matchFood, parseReceipt, priceTrend, rememberReceiptName, setPrice, unitLabel, unitPrice,
 } from './receipt.js';
 import { readImageText } from './ocr.js';
+import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
+import { yearRecap } from './recap.js';
 import {
   amountText, guessStaple, itemKey, listText, pruneChecks, setChecked, shoppingList,
 } from './shopping.js';
@@ -154,6 +156,8 @@ function renderPlan() {
         ${week.plannedDays && week.total.items - week.total.missingNutrition > 0 ? `<span><strong>${esc(kcal(week.total.cal / week.plannedDays))}</strong> a day on average</span>` : ''}
         <button class="link" data-act="go-summary">Details</button>
       </div>` : `<p class="hint center">Tap <strong>+</strong> on a meal to plan it. Add recipes in the Recipes tab.</p>`}
+    ${S().recipes.length ? `<div class="plan-tools"><button class="btn small" data-act="autoplan">✨ Auto-plan this week</button></div>` : ''}
+    ${renderUseItUp(true)}
     <div class="days">
       ${daysBetween(from, to).map((d) => renderDay(d, t)).join('')}
     </div>
@@ -577,6 +581,7 @@ function renderPantry() {
       ${staples.length ? `<h2 class="section">Always have</h2><ul class="food-list shop-list">${staples.map(row).join('')}</ul>` : ''}
       ${other.length ? `<h2 class="section">In the pantry and fridge</h2><ul class="food-list shop-list">${other.map(row).join('')}</ul>` : ''}
     ` : '<p class="empty">Nothing here yet. You can also tap the house button next to an item on the shopping list.</p>'}
+    ${list.length ? renderUseItUp(false) : ''}
   `;
 }
 
@@ -623,6 +628,7 @@ function summaryRange() {
 }
 
 function renderSummary() {
+  if (ui.summaryMode === 'year') return renderYear();
   const { from, to, label } = summaryRange();
   const r = rangeTotals(S(), from, to);
   const tot = r.total;
@@ -634,6 +640,7 @@ function renderSummary() {
     <div class="seg" role="tablist">
       <button class="${ui.summaryMode === 'week' ? 'on' : ''}" data-act="summary-mode" data-mode="week">Week</button>
       <button class="${ui.summaryMode === 'month' ? 'on' : ''}" data-act="summary-mode" data-mode="month">Month</button>
+      <button class="${ui.summaryMode === 'year' ? 'on' : ''}" data-act="summary-mode" data-mode="year">Year in food</button>
     </div>
     <header class="day-header">
       <button class="icon-btn" data-act="summary-prev" aria-label="Previous">‹</button>
@@ -672,6 +679,69 @@ function renderSummary() {
           <tfoot><tr><th>Total</th><th>${Math.round(tot.cal).toLocaleString()}</th><th>${fmtNum(tot.protein, 0)} g</th><th>${fmtNum(tot.carbs, 0)} g</th><th>${fmtNum(tot.fat, 0)} g</th><th>${esc(money(tot.cost))}</th></tr></tfoot>
         </table>
       </div>
+    `}
+  `;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function renderYear() {
+  const year = (ui.summaryAnchor || today()).slice(0, 4);
+  const r = yearRecap(S(), year, today());
+  const isNow = year === today().slice(0, 4);
+  const top = r.topRecipes[0];
+  const W = 640;
+  const H = 150;
+  const max = Math.max(1, ...r.months.map((m) => m.cost));
+  const slot = W / 12;
+  return `
+    <header class="page-header"><h1>Summary</h1></header>
+    <div class="seg" role="tablist">
+      <button data-act="summary-mode" data-mode="week">Week</button>
+      <button data-act="summary-mode" data-mode="month">Month</button>
+      <button class="on" data-act="summary-mode" data-mode="year">Year in food</button>
+    </div>
+    <header class="day-header">
+      <button class="icon-btn" data-act="summary-prev" aria-label="Previous year">‹</button>
+      <div class="day-title"><h2 class="range-title">${esc(year)}${isNow ? ' so far' : ''}</h2></div>
+      <button class="icon-btn" data-act="summary-next" aria-label="Next year" ${isNow ? 'disabled' : ''}>›</button>
+    </header>
+    ${!r.meals ? '<p class="empty">Nothing planned in this year yet.</p>' : `
+      <div class="year-hero card">
+        ${top ? `
+          ${top.recipe?.photo && photoUrl(top.recipe.photo) ? `<img class="hero small" src="${esc(photoUrl(top.recipe.photo))}" alt="" />` : ''}
+          <span class="tile-label">Your dish of the year</span>
+          <strong class="year-dish">${esc(top.recipe?.name || '')}</strong>
+          <span class="tile-sub">cooked ${top.count} time${top.count === 1 ? '' : 's'}, ${fmtQty(top.portions)} portion${top.portions === 1 ? '' : 's'} eaten</span>` : '<strong class="year-dish">A year of quick meals</strong>'}
+      </div>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label">Meals</span><strong>${r.meals.toLocaleString()}</strong><span class="tile-sub">on ${r.days} day${r.days === 1 ? '' : 's'}</span></div>
+        <div class="tile"><span class="tile-label">Batches cooked</span><strong>${r.batches.toLocaleString()}</strong><span class="tile-sub">${r.newRecipes.length} new recipe${r.newRecipes.length === 1 ? '' : 's'} tried</span></div>
+        <div class="tile"><span class="tile-label">Spent on food</span><strong>${esc(money(r.cost))}</strong><span class="tile-sub">${r.days ? `${esc(money(r.cost / r.days))} a day` : ''}</span></div>
+        <div class="tile"><span class="tile-label">Busiest month</span><strong>${r.busiestMonth != null ? MONTHS[r.busiestMonth] : '–'}</strong><span class="tile-sub">${r.busiestMonth != null ? `${r.months[r.busiestMonth].meals} meals` : ''}</span></div>
+      </div>
+      <div class="card">
+        <h2 class="section tight">Spent each month</h2>
+        <svg class="chart" viewBox="0 0 ${W} ${H + 24}" role="img" aria-label="Cost per month">
+          <line class="grid" x1="0" x2="${W}" y1="${H}" y2="${H}" />
+          ${r.months.map((m, i) => {
+            const h = (m.cost / max) * (H - 10);
+            const x = i * slot + slot * 0.2;
+            return `${h > 0 ? `<rect class="bar-fill" x="${x}" y="${H - h}" width="${slot * 0.6}" height="${h}" rx="3" />` : ''}
+              <text class="axis" x="${x + slot * 0.3}" y="${H + 18}" text-anchor="middle">${MONTHS[i].slice(0, 1)}</text>
+              <rect class="hit" x="${i * slot}" y="0" width="${slot}" height="${H}" data-tip="${esc(`${MONTHS[i]}: ${money(m.cost)}, ${m.meals} meals`)}" />`;
+          }).join('')}
+        </svg>
+      </div>
+      <div class="year-cols">
+        ${r.topRecipes.length ? `<div class="card"><h2 class="section tight">Most cooked</h2><ol class="rank">${r.topRecipes.map((x) => `<li><button class="link" data-act="view-recipe" data-id="${x.recipe?.id}">${esc(x.recipe?.name || '')}</button> <span class="muted">${x.count}×</span></li>`).join('')}</ol></div>` : ''}
+        ${r.topIngredients.length ? `<div class="card"><h2 class="section tight">Favourite ingredients</h2><ol class="rank">${r.topIngredients.map((x) => `<li>${esc(x.name)} <span class="muted">in ${x.count} batch${x.count === 1 ? '' : 'es'}</span></li>`).join('')}</ol></div>` : ''}
+      </div>
+      ${r.topRated || r.newRecipes.length ? `<div class="card">
+        ${r.topRated ? `<p class="flush-p"><strong>Top rated:</strong> ${esc(r.topRated.name)} ${'★'.repeat(r.topRated.rating)}</p>` : ''}
+        ${r.newRecipes.length ? `<p class="flush-p"><strong>New this year:</strong> ${esc(r.newRecipes.filter(Boolean).slice(0, 12).map((x) => x.name).join(', '))}${r.newRecipes.length > 12 ? '…' : ''}</p>` : ''}
+        ${r.cal ? `<p class="flush-p"><strong>Calories planned:</strong> ${Math.round(r.cal).toLocaleString()} kcal${r.cal > 2000 * 30 ? `, about ${Math.round(r.cal / 2000)} days of a 2,000 kcal diet` : ''}</p>` : ''}
+      </div>` : ''}
     `}
   `;
 }
@@ -874,6 +944,7 @@ function renderSheetInner() {
     scan: renderScan,
     cook: renderCookSheet,
     receipt: renderReceipt,
+    autoplan: renderAutoPlan,
     surprise: renderSurprise,
   }[s.kind](s);
   el.innerHTML = html;
@@ -1162,6 +1233,123 @@ function renderSurprise(s) {
           </div>`}
       </div>
     </div>`;
+}
+
+// ----- Use it up -----
+
+function renderUseItUp(compact) {
+  const soon = useSoon(S(), today());
+  if (compact && !soon.length) return '';
+  const ideas = useItUp(S(), today(), { limit: compact ? 3 : 6 });
+  if (compact && !ideas.some((x) => x.urgent.length)) {
+    return `<div class="card use-up"><p class="flush-p"><strong>Use it up:</strong> ${esc(soon.map((p) => `${p.name} (by ${shortDay(p.until)})`).join(', '))}. None of your recipes use ${soon.length === 1 ? 'it' : 'them'} yet.</p></div>`;
+  }
+  if (!ideas.length) return '';
+  return `
+    <div class="card use-up">
+      ${compact ? `<p class="flush-p"><strong>Use it up:</strong> ${esc(soon.map((p) => `${p.name} (by ${shortDay(p.until)})`).join(', '))}</p>` : '<h2 class="section tight">Recipes that use what you have</h2>'}
+      <ul class="pick-list">${ideas.map((x) => `
+        <li><button class="pick" data-act="view-recipe" data-id="${x.recipe.id}">
+          ${thumb(x.recipe.photo)}
+          <span class="entry-main"><span class="title">${esc(x.recipe.name)}</span>
+          <span class="meta">uses ${esc(x.uses.map((p) => p.name).join(', '))}${x.urgent.length ? ' <span class="badge warn">soon</span>' : ''}</span></span>
+        </button></li>`).join('')}</ul>
+    </div>`;
+}
+
+// ----- Auto-plan -----
+
+function fitsSlot(r, slotId) {
+  const mealGroup = S().categories.find((g) => g.id === 'meal' || /^meal/i.test(g.name));
+  const tagged = mealGroup && (r.tags || []).some((t) => mealGroup.options.some((o) => o.id === t));
+  if (tagged) {
+    const names = recipeTags(S(), r).map(({ option }) => option.name.toLowerCase());
+    const slot = slots().find((x) => x.id === slotId);
+    const n = (slot?.name || '').toLowerCase();
+    if (names.some((x) => x === n || `${x}s` === n || x === `${n}s`)) return true;
+    // A dinner recipe is fine for lunch too.
+    if (/lunch/.test(n) && names.includes('dinner')) return true;
+    return guessSlot(r) === slotId;
+  }
+  const n = (slots().find((x) => x.id === slotId)?.name || '').toLowerCase();
+  return !/breakfast|snack|dessert/.test(n);
+}
+
+function openAutoPlan() {
+  const days = weekDays(ui.week, today());
+  const sl = slots().filter((x) => /dinner/i.test(x.name)).map((x) => x.id);
+  const sh = {
+    kind: 'autoplan', key: key(),
+    days: days.length ? days : daysBetween(ui.week, addDays(ui.week, 6)),
+    slots: sl.length ? sl : [slots()[slots().length - 1].id],
+    leftovers: true, budgetText: S().settings.planBudget || '', plan: null,
+  };
+  openSheet(sh);
+  suggestPlan(sh);
+}
+
+function suggestPlan(s) {
+  s.plan = autoPlan(S(), {
+    days: s.days.slice().sort(), slots: s.slots, today: today(), fits: fitsSlot,
+    leftovers: s.leftovers, budget: parseQty(String(s.budgetText || '')) || null,
+  });
+  renderSheet();
+}
+
+function renderAutoPlan(s) {
+  const all = daysBetween(ui.week, addDays(ui.week, 6));
+  const tot = s.plan ? planTotals(S(), s.plan) : null;
+  const byDay = {};
+  for (const p of s.plan || []) (byDay[p.date] ||= []).push(p);
+  const order = Object.fromEntries(slots().map((x, i) => [x.id, i]));
+  return `
+    <div class="sheet">
+      ${sheetHeader('Auto-plan', { left: 'Cancel', right: s.plan?.length ? 'Add to plan' : '', rightAct: 'autoplan-apply' })}
+      <div class="sheet-body">
+        <p class="hint flush">Fills the empty meals with your recipes: favourites and dishes you haven’t had in a while, recipes that share ingredients (less waste), things in your pantry that need using, and your calorie goal and budget.</p>
+        <div class="card">
+          <span class="field-label">Days</span>
+          <div class="chips">${all.map((d) => `<button class="chip tiny${s.days.includes(d) ? ' on' : ''}" data-act="ap-day" data-date="${d}">${esc(shortDay(d).split(',')[0])}</button>`).join('')}</div>
+          <span class="field-label">Meals</span>
+          <div class="chips">${slots().map((x) => `<button class="chip tiny${s.slots.includes(x.id) ? ' on' : ''}" data-act="ap-slot" data-slot="${esc(x.id)}">${esc(x.name)}</button>`).join('')}</div>
+          <label class="field row"><input type="checkbox" id="ap-leftovers" ${s.leftovers ? 'checked' : ''} /> <span>Cook once, eat leftovers on the next days</span></label>
+          <label class="field inline"><span class="wide-label">Budget for these meals (${esc(S().settings.currency)})</span>
+            <input type="text" inputmode="decimal" id="ap-budget" value="${esc(s.budgetText)}" placeholder="Optional" /></label>
+        </div>
+        ${!s.plan ? '' : !s.plan.length ? '<p class="empty">Nothing to fill: those meals are already planned.</p>' : `
+          <div class="card-head"><h2 class="section tight">Suggested</h2><button class="btn small" data-act="autoplan-shuffle">↻ Shuffle</button></div>
+          <p class="hint flush">${esc([
+            `${s.plan.filter((p) => p.type === 'cook').length} to cook, ${s.plan.filter((p) => p.type === 'leftover').length} leftovers`,
+            tot.cost ? `about ${money(tot.cost)}${tot.unpriced ? ' (some without a price)' : ''}` : '',
+          ].filter(Boolean).join(' · '))}</p>
+          ${Object.keys(byDay).sort().map((d) => `
+            <div class="ap-day">
+              <strong>${esc(shortDay(d))}</strong>
+              <ul class="mini-list">${byDay[d].sort((a, b) => (order[a.slot] ?? 9) - (order[b.slot] ?? 9)).map((p) => {
+                const r = findRecipe(S(), p.recipeId);
+                return `<li>${esc(slotName(p.slot))}: ${esc(r?.name || '')} ${p.type === 'leftover' ? '<span class="badge">Leftovers</span>' : '<span class="badge cook">Cook</span>'}</li>`;
+              }).join('')}</ul>
+            </div>`).join('')}`}
+      </div>
+    </div>`;
+}
+
+function applyAutoPlan(s) {
+  const st = S();
+  const made = [];
+  for (const p of s.plan) {
+    if (p.type === 'cook') {
+      made.push({ p, e: addEntry(st, p.date, { type: 'cook', slot: p.slot, recipeId: p.recipeId, scale: 1 }) });
+    } else {
+      const src = made.find((m) => m.p === s.plan[p.from]);
+      if (src) made.push({ p, e: addEntry(st, p.date, { type: 'leftover', slot: p.slot, recipeId: p.recipeId, from: refOf(src.p.date, src.e.id) }) });
+    }
+  }
+  st.settings.planBudget = s.budgetText || '';
+  ui.sheets.pop();
+  store.save();
+  renderSheet();
+  toast(`Planned ${made.length} meal${made.length === 1 ? '' : 's'}`);
 }
 
 // A recipe tagged Breakfast goes to breakfast, and so on; otherwise dinner.
@@ -2623,6 +2811,21 @@ function onClick(e) {
     case 'shop-share': shareShopList(); break;
     case 'shop-view': ui.shopView = el.dataset.view; render(); break;
     case 'receipt-open': openReceipt(); break;
+    case 'autoplan': openAutoPlan(); break;
+    case 'autoplan-shuffle': suggestPlan(s); break;
+    case 'autoplan-apply': applyAutoPlan(s); break;
+    case 'ap-day': {
+      const d = el.dataset.date;
+      s.days = s.days.includes(d) ? s.days.filter((x) => x !== d) : [...s.days, d];
+      suggestPlan(s);
+      break;
+    }
+    case 'ap-slot': {
+      const id = el.dataset.slot;
+      s.slots = s.slots.includes(id) ? s.slots.filter((x) => x !== id) : [...s.slots, id];
+      suggestPlan(s);
+      break;
+    }
     case 'receipt-read-text': s.text = $('#receipt-text')?.value || ''; showReceiptRows(s, s.text); break;
     case 'receipt-save': saveReceipt(s); break;
     case 'pantry-have': {
@@ -2644,7 +2847,8 @@ function onClick(e) {
     case 'summary-next': {
       const dir = act === 'summary-prev' ? -1 : 1;
       const anchor = ui.summaryAnchor || today();
-      if (ui.summaryMode === 'week') ui.summaryAnchor = addDays(anchor, 7 * dir);
+      if (ui.summaryMode === 'year') ui.summaryAnchor = `${Number(anchor.slice(0, 4)) + dir}-06-01`;
+      else if (ui.summaryMode === 'week') ui.summaryAnchor = addDays(anchor, 7 * dir);
       else {
         const d = fromKey(anchor);
         ui.summaryAnchor = dateKey(new Date(d.getFullYear(), d.getMonth() + dir, 1, 12));
@@ -3063,6 +3267,8 @@ async function onChange(e) {
     if (p) { p.until = el.value || null; store.save(); }
     return;
   }
+  if (el.id === 'ap-leftovers') { top().leftovers = el.checked; suggestPlan(top()); return; }
+  if (el.id === 'ap-budget') { suggestPlan(top()); return; }
   if (el.id === 'shop-from') { ui.shopFrom = el.value || null; render(); return; }
   if (el.id === 'shop-days') {
     const n = Math.max(1, Math.min(31, Math.round(Number(el.value)) || 7));
@@ -3117,6 +3323,7 @@ function onInput(e) {
   if (el.id === 'paste-all') { top().pasteAll = el.value; return; }
   if (el.id === 'receipt-text') { top().text = el.value; return; }
   if (el.id === 'rc-store') { top().store = el.value; return; }
+  if (el.id === 'ap-budget') { top().budgetText = el.value; return; }
   if (el.id === 'rc-date') { top().date = el.value; return; }
   if (el.id === 'import-url') { top().importUrl = el.value; }
 }
