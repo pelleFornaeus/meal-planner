@@ -543,3 +543,73 @@ h2.recipe-title { font-size: 20px; }
 .import-row { display: flex; gap: 8px; }
 .import-row input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 16px; color: var(--text); }
 .error-text { color: var(--danger); }
+
+/* ---------- Pantry ---------- */
+.small-seg button { padding: 6px; font-size: 13px; }
+.have-btn { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: var(--muted); }
+.have-btn:hover { background: var(--surface-2); color: var(--accent); }
+.have-btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.food-row.static { cursor: default; }
+.food-row.static:hover { background: none; }
+.at-home { margin-top: 18px; }
+.at-home summary { color: var(--muted); font-weight: 600; font-size: 14px; cursor: pointer; padding: 6px 4px; }
+.at-home .food-list { margin-top: 6px; }
+.home-dot { width: 40px; flex: none; text-align: center; color: var(--green, #3d8b5a); font-weight: 700; }
+.shop-item.is-home .title { color: var(--muted); }
+.shop-add.top { margin: 4px 0 8px; }
+.pantry-item .food-row { padding: 8px 14px; }
+.mini-toggle, .mini-date { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-right: 12px; }
+.mini-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+.mini-date input { font-size: 13px; padding: 2px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+.mini-date.soon { color: var(--danger); font-weight: 600; }
+
+/* ---------- Favourites and ratings ---------- */
+.title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.fav-btn { font-size: 28px; line-height: 1; color: var(--muted); padding: 4px 6px; border-radius: 10px; flex: none; }
+.fav-btn.on { color: #e0a419; }
+.fav-star { color: #e0a419; }
+.stars { display: flex; gap: 2px; margin: -2px 0 4px; }
+.star { font-size: 26px; line-height: 1; color: var(--line); padding: 2px; }
+.star.on { color: #e0a419; }
+.stars-small { font-size: 12px; color: #e0a419; letter-spacing: 1px; }
+.stars-small .dim { color: var(--line); }
+.surprise-chip { margin-left: auto; }
+
+/* ---------- Cooking mode and timers ---------- */
+.cook-start { margin: 4px 0 12px; }
+.step-timers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.timer-btn { font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.step-timers.big .timer-btn { font-size: 18px; padding: 10px 18px; }
+.cook-progress { height: 4px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.cook-progress span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+.cook-step { font-size: 24px; line-height: 1.45; font-weight: 500; margin: 18px 0 8px; }
+.cook-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.cook-nav .btn { padding: 16px; font-size: 17px; }
+.cook-nav .btn:disabled { opacity: .45; }
+.cook-done { text-align: center; }
+.center-row { display: flex; justify-content: center; }
+.timers {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  width: min(420px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px;
+}
+.timer {
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 14px;
+  background: var(--text); color: var(--bg); box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+.timer .link { color: var(--bg); opacity: .85; font-size: 14px; }
+.timer .icon-btn { color: var(--bg); }
+.timer-label { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timer-clock { font-variant-numeric: tabular-nums; font-size: 18px; }
+.timer.ringing { background: var(--accent); color: #fff; animation: ring .6s ease-in-out infinite alternate; }
+@keyframes ring { from { transform: scale(1); } to { transform: scale(1.03); } }
+@media (min-width: 960px) { .timers { bottom: 20px; } }
+
+/* ---------- Surprise me ---------- */
+.surprise .center, .recipe-title.center { text-align: center; }
+.spin-box { display: grid; place-items: center; padding: 36px 0 12px; gap: 12px; }
+.spin-die { font-size: 64px; animation: roll .5s linear infinite; }
+.spin-die.done { animation: none; }
+.spin-name { font-size: 22px; font-weight: 600; min-height: 1.4em; text-align: center; margin: 0; }
+@keyframes roll { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin-die, .timer.ringing { animation: none; } }

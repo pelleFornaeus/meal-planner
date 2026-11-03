@@ -46,6 +46,7 @@ export function defaultState() {
     categories: defaultCategories(),
     foods: [],
     plan: {},
+    pantry: [],
     shopping: { checked: {}, extras: [] },
     settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '', shopDays: 7 },
   };
@@ -58,6 +59,7 @@ export function migrate(s) {
   out.categories = Array.isArray(s.categories) ? s.categories : d.categories;
   out.foods = Array.isArray(s.foods) ? s.foods.map(upgradeFood) : [];
   out.plan = s.plan && typeof s.plan === 'object' ? s.plan : {};
+  out.pantry = Array.isArray(s.pantry) ? s.pantry : [];
   const shop = s.shopping && typeof s.shopping === 'object' ? s.shopping : {};
   out.shopping = {
     checked: shop.checked && typeof shop.checked === 'object' ? shop.checked : {},
@@ -215,9 +217,18 @@ export function recipeTags(state, recipe) {
 }
 
 // Filter: { [groupId]: Set(optionIds) } — a recipe must match every group that has a choice.
-export function filterRecipes(state, { search = '', filter = {}, sort = 'name' } = {}) {
+function lastCookedOf(state, id) {
+  let last = '';
+  for (const [date, day] of Object.entries(state.plan)) {
+    if (date > last && Object.values(day).some((e) => e.type === 'cook' && e.recipeId === id)) last = date;
+  }
+  return last;
+}
+
+export function filterRecipes(state, { search = '', filter = {}, sort = 'name', favorites = false } = {}) {
   const q = search.trim().toLowerCase();
   let list = state.recipes.filter((r) => {
+    if (favorites && !r.favorite) return false;
     if (q) {
       const hay = `${r.name} ${(r.ingredients || []).map((i) => i.name).join(' ')}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -241,6 +252,10 @@ export function filterRecipes(state, { search = '', filter = {}, sort = 'name' }
       return (pb === Infinity ? -1 : pb) - (pa === Infinity ? -1 : pa);
     },
     time: (a, b) => num(a.minutes) - num(b.minutes),
+    favorite: (a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.rating || 0) - (a.rating || 0),
+    rating: (a, b) => (b.rating || 0) - (a.rating || 0),
+    // Longest since it was last cooked first; never cooked comes first of all.
+    stale: (a, b) => (lastCookedOf(state, a.id) || '').localeCompare(lastCookedOf(state, b.id) || ''),
   }[sort] || ((a, b) => a.name.localeCompare(b.name));
   list = list.slice().sort((a, b) => by(a, b) || a.name.localeCompare(b.name));
   return list;
