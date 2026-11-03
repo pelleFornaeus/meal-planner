@@ -16,6 +16,8 @@ A meal planner that runs in your browser and works offline. Plan the week from y
 - **Cooking mode.** **Start cooking** shows one step at a time in big text and keeps the screen on. Times in the steps ("simmer 30 minutes") become timer buttons that ring when done.
 - **Surprise me.** Rolls the dice on your recipes (or on the ones for that meal when adding to a day). Favourites and dishes you haven't had in a while come up more often.
 - **Copy last week.** One tap at the bottom of the Plan tab repeats last week's meals.
+- **Price history.** Every time a food's price changes, the old one is kept. The food shows a small chart of its price over time, and the Foods list marks foods that went up or down.
+- **Receipt scanning.** Under **Recipes → Foods** (or at the bottom of the Shop tab), take a photo of a grocery receipt. The app reads it on your phone, matches each line to one of your foods and updates the prices. It remembers your matches for next time. You can also paste receipt text.
 - **Totals.** Each day shows calories, protein and cost; tap it for carbs, fat, sugar, fiber and your daily goals. The Summary tab shows cost and nutrition per week or month, with charts.
 
 ## Install on iPhone
@@ -54,6 +56,8 @@ npm test    # runs the logic tests (Node 20+)
 - `js/model.js`: recipes, the plan, batches and leftovers, totals, parsing ingredient lines, the food list
 - `js/foods.js`: units, nutrition and price for an amount, reading USDA and Open Food Facts results
 - `js/lookup.js`: the online searches; `js/scanner.js`: barcode scanning (ZXing in `js/vendor`, Apache 2.0, loaded only when scanning)
+- `js/receipt.js`: price history and reading receipts; `js/ocr.js`: reading text from a photo with Tesseract (`js/vendor/tesseract`, Apache 2.0, loaded only when scanning a receipt)
+- `js/extras.js`: copy a week, last cooked, Surprise me, timers in steps
 - `js/app.js`: the interface
 - `js/store.js`: saving to the browser
 - `js/records.js`, `js/sync.js`: syncing through Supabase, one record per recipe, category group, saved food or planned meal. The newest change to each record wins.
