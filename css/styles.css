@@ -642,3 +642,36 @@ h2.recipe-title { font-size: 20px; }
 .year-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 12px; }
 .rank { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
 .icon-btn:disabled { opacity: .3; }
+
+/* ---------- Send to Amazon / Instacart ---------- */
+.send-btn { margin-top: 10px; }
+.compare-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.compare-cols > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.compare-cols strong { font-size: 22px; }
+.compare-cols .meta { font-size: 13px; color: var(--muted); }
+.compare-card .hint { margin-top: 10px; }
+.send-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.send-row { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.send-row.is-skip { opacity: .55; }
+.send-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.send-top .title { font-weight: 600; }
+.send-top .amount { color: var(--muted); font-weight: 400; }
+.send-top .meta { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.send-store { display: grid; grid-template-columns: 74px 1fr auto; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); font: inherit; color: inherit; border: 1px solid transparent; }
+.send-store.on { border-color: var(--accent); }
+.send-store .store-name { font-size: 13px; font-weight: 600; color: var(--muted); }
+.send-store .store-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; text-align: left; }
+.send-store .link-ish { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.send-store .price { font-weight: 600; font-size: 14px; }
+.send-store.cheaper .price, .send-store.cheaper .price-in input { color: var(--green); }
+.price-in input { width: 84px; padding: 5px 8px; font-size: 14px; text-align: right; }
+.send-pick { margin: 0; }
+.send-pick button { padding: 6px; font-size: 13px; }
+.send-pick button:disabled { opacity: .4; }
+.send-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+.send-actions a.btn { text-align: center; text-decoration: none; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.steps-help { margin: 0 0 10px; padding-left: 20px; line-height: 1.5; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cheaper-tag { font-size: 11px; font-weight: 700; color: var(--green); background: var(--green-soft); border-radius: 6px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+.price-in { display: flex; align-items: center; }
