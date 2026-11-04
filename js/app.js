@@ -8,6 +8,9 @@ import {
   matchFood, parseReceipt, priceTrend, rememberReceiptName, setPrice, unitLabel, unitPrice,
 } from './receipt.js';
 import { readImageText } from './ocr.js';
+import {
+  amazonCartUrl, compareRows, compareTotals, getLink, instacartItems, parseAmazonLink, parsePrice, setLink, titleFromAmazonUrl,
+} from './stores.js';
 import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
 import { yearRecap } from './recap.js';
 import {
@@ -444,7 +447,7 @@ function shopGroups() {
   const visible = [...items, ...shownExtras];
   const open = visible.filter((i) => !i.done);
   return {
-    list, groups, from, to, atHome,
+    list, groups, from, to, atHome, open,
     left: open.length,
     total: visible.length,
     cost: open.reduce((s, i) => s + (i.cost || 0), 0),
@@ -487,6 +490,7 @@ function renderShop() {
         <span><strong>${g.left}</strong> of ${g.total} left${g.cost ? ` · about <strong>${esc(money(g.cost))}</strong>` : ''}</span>
         ${g.left < g.total ? '<button class="link" data-act="shop-uncheck">Untick all</button>' : ''}
       </div>
+      ${g.left ? '<button class="btn wide send-btn" data-act="shop-send">🛒 Send to Amazon or Instacart</button>' : ''}
       ${g.unpriced && g.cost ? `<p class="hint">${g.unpriced} item${g.unpriced === 1 ? ' has' : 's have'} no price, so the total leaves ${g.unpriced === 1 ? 'it' : 'them'} out.</p>` : ''}
       ${g.groups.map((grp) => `
         <h2 class="section">${esc(grp.title)}${grp.sub ? ` <span class="source">${esc(grp.sub)}</span>` : ''}</h2>
@@ -611,6 +615,242 @@ async function shareShopList() {
   } catch {
     prompt('Copy the list:', text);
   }
+}
+
+// ----- Sending the list to Amazon or Instacart -----
+
+const amazonHost = () => S().settings.amazonHost || 'www.amazon.com';
+const linkKeyFor = (name) => itemKey(S(), name);
+
+function openSend() {
+  openSheet({ kind: 'send', key: key(), picks: {} });
+}
+
+function sendRows(s) {
+  return compareRows(S(), shopGroups().open, { picks: s.picks, keyFor: linkKeyFor });
+}
+
+function renderSend(s) {
+  const rows = sendRows(s);
+  const t = compareTotals(rows);
+  const cur = S().settings.currency || '$';
+  const storeCost = (n) => (n != null ? esc(money(n)) : '');
+  const row = (r) => `
+    <li class="send-row${r.pick === 'skip' ? ' is-skip' : ''}">
+      <div class="send-top">
+        <span class="title">${esc(r.name)}${r.amount ? ` <span class="amount">${esc(r.amount)}</span>` : ''}</span>
+        ${r.estimate != null ? `<span class="meta">usually ${esc(money(r.estimate))}</span>` : ''}
+      </div>
+      <button class="send-store${r.pick === 'amazon' ? ' on' : ''}${r.cheaper === 'amazon' ? ' cheaper' : ''}" data-act="store-link" data-key="${esc(r.key)}">
+        <span class="store-name">Amazon</span>
+        <span class="store-what">${r.amazon ? `${esc(r.amazon.title || r.amazon.asin)}${r.qty > 1 ? ` <span class="amount">×${r.qty}</span>` : ''}` : '<span class="muted">Pick a product</span>'}</span>
+        <span class="price">${r.cheaper === 'amazon' ? '<span class="cheaper-tag">cheaper</span>' : ''}${storeCost(r.amazonCost)}</span>
+      </button>
+      <div class="send-store${r.pick === 'instacart' ? ' on' : ''}${r.cheaper === 'instacart' ? ' cheaper' : ''}">
+        <span class="store-name">Instacart</span>
+        <button class="store-what link-ish" data-act="store-link" data-key="${esc(r.key)}">“${esc(r.instacart?.name || r.name)}”</button>
+        <label class="price-in">${r.cheaper === 'instacart' ? '<span class="cheaper-tag">cheaper</span>' : ''}<span class="sr-only">Instacart price for ${esc(r.name)}</span>
+          <input type="text" inputmode="decimal" placeholder="${esc(cur)} price" data-ic-price="${esc(r.linkKey)}" value="${r.instacartCost != null ? esc(r.instacartCost.toFixed(2)) : ''}" /></label>
+      </div>
+      <div class="seg small-seg send-pick">
+        <button class="${r.pick === 'amazon' ? 'on' : ''}" data-act="send-pick" data-key="${esc(r.key)}" data-pick="amazon"${r.amazon ? '' : ' disabled'}>Amazon</button>
+        <button class="${r.pick === 'instacart' ? 'on' : ''}" data-act="send-pick" data-key="${esc(r.key)}" data-pick="instacart">Instacart</button>
+        <button class="${r.pick === 'skip' ? 'on' : ''}" data-act="send-pick" data-key="${esc(r.key)}" data-pick="skip">Skip</button>
+      </div>
+    </li>`;
+  const diff = t.both.count ? Math.abs(t.both.amazon - t.both.instacart) : 0;
+  return `
+    <div class="sheet">
+      ${sheetHeader('Send to a store')}
+      <div class="sheet-body">
+        ${!rows.length ? '<p class="empty">Everything is ticked off.</p>' : `
+        <div class="card compare-card">
+          <div class="compare-cols">
+            <div><span class="field-label">Amazon</span>
+              <strong>${t.amazon.linked ? esc(money(t.amazon.cost)) : '–'}</strong>
+              <span class="meta">${t.amazon.linked} of ${rows.length} items have a product${t.amazon.unpriced ? `, ${t.amazon.unpriced} without a price` : ''}</span></div>
+            <div><span class="field-label">Instacart</span>
+              <strong>${t.instacart.priced ? esc(money(t.instacart.cost)) : '–'}</strong>
+              <span class="meta">${t.instacart.priced ? `${t.instacart.priced} of ${rows.length} items priced` : 'Type in prices to compare'}</span></div>
+          </div>
+          ${t.both.count ? `<p class="hint flush">For the ${t.both.count} item${t.both.count === 1 ? '' : 's'} priced at both: Amazon ${esc(money(t.both.amazon))}, Instacart ${esc(money(t.both.instacart))}${diff >= 0.01 ? `. <strong>${t.both.amazon < t.both.instacart ? 'Amazon' : 'Instacart'} is ${esc(money(diff))} cheaper.</strong>` : '.'}</p>` : ''}
+        </div>
+        <p class="hint">Choose a store for each item. Tap an Amazon line to pick the product (the app remembers it). Instacart finds products itself; after opening the list there you can type its prices here to compare next time.</p>
+        <ul class="send-list">${rows.map(row).join('')}</ul>
+        <div class="send-actions">
+          <button class="btn primary wide" data-act="send-amazon"${t.toAmazon.count ? '' : ' disabled'}>Add ${t.toAmazon.count} item${t.toAmazon.count === 1 ? '' : 's'} to Amazon cart${t.toAmazon.cost ? ` · ${esc(money(t.toAmazon.cost))}` : ''}</button>
+          ${s.instacartUrl ? `<a class="btn primary wide" href="${esc(s.instacartUrl)}" target="_blank" rel="noopener">Open the list in Instacart</a>`
+            : `<button class="btn wide" data-act="send-instacart"${t.toInstacart.count && !s.instacartBusy ? '' : ' disabled'}>${s.instacartBusy ? 'Making the Instacart list…' : `Make an Instacart list of ${t.toInstacart.count} item${t.toInstacart.count === 1 ? '' : 's'}`}</button>`}
+          ${s.instacartError ? `<p class="hint error-text">${esc(s.instacartError)}</p>` : ''}
+          ${s.sent?.length ? `<button class="btn wide" data-act="send-tick">Tick off the ${s.sent.length} item${s.sent.length === 1 ? '' : 's'} I sent</button>` : ''}
+        </div>`}
+      </div>
+    </div>`;
+}
+
+function sendTo(s, store) {
+  const rows = sendRows(s).filter((r) => r.pick === store);
+  s.sent = [...new Set([...(s.sent || []), ...rows.map((r) => r.key)])];
+  return rows;
+}
+
+function sendAmazon(s) {
+  const rows = sendTo(s, 'amazon');
+  if (!rows.length) return;
+  const url = amazonCartUrl(amazonHost(), rows.map((r) => ({ asin: r.amazon.asin, qty: r.qty })));
+  window.open(url, '_blank', 'noopener');
+  renderSheet();
+}
+
+async function sendInstacart(s) {
+  if (!sync.user) {
+    s.instacartError = 'Instacart lists are made through your Supabase account, so sign in first (Settings → Sync).';
+    renderSheet();
+    return;
+  }
+  const rows = sendRows(s).filter((r) => r.pick === 'instacart');
+  if (!rows.length) return;
+  s.instacartBusy = true;
+  s.instacartError = '';
+  renderSheet();
+  try {
+    let res;
+    try {
+      res = await importFunction({ instacart: { title: `Meals: ${shortDate(shopRange().from)} – ${shortDate(shopRange().to)}`, items: instacartItems(rows) } });
+    } catch {
+      throw new Error(navigator.onLine ? 'Couldn’t reach the app’s Supabase function. See “Recipe import” in the README.' : 'You’re offline.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 501 || data.setup) throw new Error('Instacart isn’t set up yet. See “Instacart setup” in the app’s README: it needs a free Instacart developer key saved in Supabase.');
+    if (!res.ok || !data.url) {
+      if (data.error === 'Bad request' || res.status === 404) throw new Error('Update the recipe-import function in Supabase with the latest code (see “Instacart setup” in the README).');
+      throw new Error(`Instacart didn’t make the list${data.error ? ` (${data.error})` : ''}.`);
+    }
+    s.instacartUrl = data.url;
+    sendTo(s, 'instacart');
+  } catch (err) {
+    s.instacartError = err.message;
+  }
+  s.instacartBusy = false;
+  if (top() === s) renderSheet();
+}
+
+function tickSent(s) {
+  const st = S();
+  const { to } = shopRange();
+  for (const k of s.sent || []) {
+    if (k.startsWith('x:')) {
+      const x = st.shopping.extras.find((y) => y.id === k.slice(2));
+      if (x) x.checked = true;
+    } else setChecked(st, k, true, to);
+  }
+  const n = (s.sent || []).length;
+  closeSheet();
+  store.save();
+  toast(`Ticked off ${n} item${n === 1 ? '' : 's'}`);
+}
+
+// Pick the Amazon product (and Instacart search) for one item.
+function openStoreLink(itemKeyValue) {
+  const r = sendRows(top()).find((x) => x.key === itemKeyValue);
+  if (!r) return;
+  const a = r.amazon || {};
+  openSheet({
+    kind: 'store-link', key: key(), linkKey: r.linkKey, name: r.name, amount: r.amount,
+    draft: {
+      paste: '', asin: a.asin || '', host: a.host || '', title: a.title || '', price: a.price ?? '', qty: r.amazon ? r.qty : 1,
+      icName: r.instacart?.name || '', icPrice: r.instacart?.price ?? '',
+    },
+  });
+}
+
+function renderStoreLink(s) {
+  const d = s.draft;
+  const search = `https://${amazonHost()}/s?k=${encodeURIComponent(d.icName || s.name)}`;
+  return `
+    <div class="sheet">
+      ${sheetHeader(s.name, { left: 'Cancel', right: 'Save', rightAct: 'store-link-save' })}
+      <div class="sheet-body">
+        ${s.amount ? `<p class="hint flush">The list needs ${esc(s.amount)}.</p>` : ''}
+        <h2 class="section tight">Amazon</h2>
+        <div class="card">
+          ${d.asin ? `
+            <label class="field"><span>Product</span><input type="text" data-bind="title" value="${esc(d.title)}" placeholder="${esc(d.asin)}" /></label>
+            <div class="field-row">
+              <label class="field"><span>Price (${esc(S().settings.currency || '$')})</span><input type="text" inputmode="decimal" data-bind="price" value="${esc(d.price)}" placeholder="Optional" /></label>
+              <label class="field"><span>How many</span><input type="number" min="1" max="99" inputmode="numeric" data-bind="qty" data-num value="${esc(d.qty)}" /></label>
+            </div>
+            <p class="hint flush">Amazon product ${esc(d.asin)}. <a href="https://${esc(d.host || amazonHost())}/dp/${esc(d.asin)}" target="_blank" rel="noopener">See it on Amazon</a> · <button class="link" data-act="store-link-clear">Use a different product</button></p>
+          ` : `
+            <ol class="steps-help">
+              <li><a href="${esc(search)}" target="_blank" rel="noopener">Search Amazon for “${esc(d.icName || s.name)}”</a> and open the product you want.</li>
+              <li>Tap <strong>Share → Copy link</strong> (or copy the address) and paste it here.</li>
+            </ol>
+            <form class="shop-add" data-form="store-link-paste">
+              <input id="amz-paste" class="search" type="text" placeholder="Paste the Amazon link" autocomplete="off" value="${esc(d.paste)}" />
+              <button class="btn primary" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Reading…' : 'Use it'}</button>
+            </form>
+          `}
+          ${s.error ? `<p class="hint error-text">${esc(s.error)}</p>` : ''}
+        </div>
+        <h2 class="section tight">Instacart</h2>
+        <div class="card">
+          <label class="field"><span>Search Instacart for</span><input type="text" data-bind="icName" value="${esc(d.icName)}" placeholder="${esc(s.name)}" /></label>
+          <label class="field"><span>Price you saw there (${esc(S().settings.currency || '$')})</span><input type="text" inputmode="decimal" data-bind="icPrice" value="${esc(d.icPrice)}" placeholder="Optional, for comparing" /></label>
+          <p class="hint flush">Instacart picks the product at the store you choose. Add words like a brand or size to the search to steer it.</p>
+        </div>
+        ${getLink(S(), s.linkKey) ? '<p class="hint center"><button class="link danger" data-act="store-link-remove">Forget the store details for this item</button></p>' : ''}
+      </div>
+    </div>`;
+}
+
+async function useAmazonPaste(s) {
+  const d = s.draft;
+  d.paste = $('#amz-paste')?.value || d.paste;
+  s.error = '';
+  let link = parseAmazonLink(d.paste);
+  if (!link) { s.error = 'That doesn’t look like an Amazon product link.'; renderSheet(); return; }
+  let info = null;
+  if (link.short || link.url) {
+    // Ask the app's Supabase function to follow short links and read the name and price.
+    if (sync.user) {
+      s.busy = true;
+      renderSheet();
+      try {
+        const res = await importFunction({ product: link.short || link.url });
+        if (res.ok) info = await res.json();
+      } catch { /* fine: fill it in by hand */ }
+      s.busy = false;
+    }
+    if (link.short) {
+      link = info?.url ? parseAmazonLink(info.url) : null;
+      if (!link) {
+        s.error = sync.user ? 'Couldn’t open that short link. Open it in Safari and copy the full address instead.' : 'Short a.co links need you to be signed in (Settings → Sync). Or open it and copy the full address.';
+        if (top() === s) renderSheet();
+        return;
+      }
+    }
+  }
+  d.asin = link.asin;
+  d.host = link.host || '';
+  d.title = (info?.title || titleFromAmazonUrl(link.url || info?.url || '') || d.title || '').slice(0, 160);
+  if (info?.price) d.price = info.price;
+  if (top() === s) renderSheet();
+}
+
+function saveStoreLink(s) {
+  const st = S();
+  const d = s.draft;
+  const price = parsePrice(d.price);
+  const icPrice = parsePrice(d.icPrice);
+  const icName = String(d.icName || '').trim();
+  setLink(st, s.linkKey, {
+    amazon: d.asin ? { asin: d.asin, host: d.host || '', title: String(d.title || '').trim(), price, qty: Math.max(1, Math.round(Number(d.qty) || 1)) } : null,
+    instacart: icName || icPrice != null ? { name: icName, price: icPrice } : null,
+  });
+  if (d.host && d.host !== amazonHost()) st.settings.amazonHost = d.host;
+  closeSheet();
+  store.save();
 }
 
 // ---------- Summary tab ----------
@@ -946,6 +1186,8 @@ function renderSheetInner() {
     receipt: renderReceipt,
     autoplan: renderAutoPlan,
     surprise: renderSurprise,
+    send: renderSend,
+    'store-link': renderStoreLink,
   }[s.kind](s);
   el.innerHTML = html;
   el.dataset.sheet = s.key;
@@ -2811,6 +3053,19 @@ function onClick(e) {
     case 'shop-share': shareShopList(); break;
     case 'shop-view': ui.shopView = el.dataset.view; render(); break;
     case 'receipt-open': openReceipt(); break;
+    case 'shop-send': openSend(); break;
+    case 'send-pick': s.picks[el.dataset.key] = el.dataset.pick; s.instacartUrl = ''; renderSheet(); break;
+    case 'send-amazon': sendAmazon(s); break;
+    case 'send-instacart': sendInstacart(s); break;
+    case 'send-tick': tickSent(s); break;
+    case 'store-link': openStoreLink(el.dataset.key); break;
+    case 'store-link-save': saveStoreLink(s); break;
+    case 'store-link-clear': Object.assign(s.draft, { asin: '', host: '', title: '', price: '', paste: '' }); renderSheet(); break;
+    case 'store-link-remove':
+      setLink(st, s.linkKey, { amazon: null, instacart: null });
+      closeSheet();
+      store.save();
+      break;
     case 'autoplan': openAutoPlan(); break;
     case 'autoplan-shuffle': suggestPlan(s); break;
     case 'autoplan-apply': applyAutoPlan(s); break;
@@ -3149,6 +3404,7 @@ function onSubmit(e) {
   const kind = form.dataset.form;
   const st = S();
   if (kind === 'sign-in') { syncAuth('in'); return; }
+  if (kind === 'store-link-paste') { useAmazonPaste(top()); return; }
   if (kind === 'food-search') {
     const sh = top();
     sh.query = $('#fs-query').value;
@@ -3223,6 +3479,15 @@ async function onChange(e) {
       }
     }
     if (el.dataset.recalc !== undefined) renderSheet();
+    return;
+  }
+  if (el.dataset.icPrice !== undefined) {
+    const k = el.dataset.icPrice;
+    const price = parsePrice(el.value);
+    const old = getLink(st, k)?.instacart || {};
+    setLink(st, k, { instacart: price == null && !old.name ? null : { ...old, name: old.name || '', price } });
+    store.save();
+    renderSheet();
     return;
   }
   if (el.dataset.file === 'import' && el.files?.[0]) { importData(el.files[0]); return; }

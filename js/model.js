@@ -47,7 +47,7 @@ export function defaultState() {
     foods: [],
     plan: {},
     pantry: [],
-    shopping: { checked: {}, extras: [] },
+    shopping: { checked: {}, extras: [], links: {} },
     settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '', shopDays: 7 },
   };
 }
@@ -64,6 +64,7 @@ export function migrate(s) {
   out.shopping = {
     checked: shop.checked && typeof shop.checked === 'object' ? shop.checked : {},
     extras: Array.isArray(shop.extras) ? shop.extras : [],
+    links: shop.links && typeof shop.links === 'object' ? shop.links : {},
   };
   out.settings = { ...d.settings, ...(s.settings || {}) };
   if (!Array.isArray(out.settings.slots) || !out.settings.slots.length) out.settings.slots = d.settings.slots;

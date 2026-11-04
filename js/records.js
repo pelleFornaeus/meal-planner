@@ -8,6 +8,7 @@
 //   p|<date>|<entryId>    one meal or food on a day
 //   k|<itemKey>           a ticked-off shopping list item
 //   x|<id>                an extra item added to the shopping list by hand
+//   l|<itemKey>           the Amazon product / Instacart search picked for a shopping item
 // Pure functions, so they can be tested without a browser.
 
 const LISTS = { r: 'recipes', c: 'categories', f: 'foods', y: 'pantry' };
@@ -24,6 +25,7 @@ export function flatten(state) {
   const shop = state.shopping || {};
   for (const [k, v] of Object.entries(shop.checked || {})) out[`k|${k}`] = v;
   for (const x of shop.extras || []) out[`x|${x.id}`] = x;
+  for (const [k, v] of Object.entries(shop.links || {})) out[`l|${k}`] = v;
   return out;
 }
 
@@ -39,10 +41,15 @@ export function applyRecord(state, key, value) {
     else list.push(value);
   } else if (kind === 's') {
     if (value !== undefined) state.settings = { ...state.settings, ...value };
-  } else if (kind === 'k' || kind === 'x') {
-    if (!state.shopping) state.shopping = { checked: {}, extras: [] };
+  } else if (kind === 'k' || kind === 'x' || kind === 'l') {
+    if (!state.shopping) state.shopping = { checked: {}, extras: [], links: {} };
     const shop = state.shopping;
-    if (kind === 'k') {
+    if (!shop.links) shop.links = {};
+    if (kind === 'l') {
+      const k = key.slice(2);
+      if (value === undefined) delete shop.links[k];
+      else shop.links[k] = value;
+    } else if (kind === 'k') {
       const k = key.slice(2);
       if (value === undefined) delete shop.checked[k];
       else shop.checked[k] = value;

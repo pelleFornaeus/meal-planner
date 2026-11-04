@@ -3,6 +3,9 @@
 //
 //   POST { url }    -> { url, ld: [...JSON-LD blocks], meta: { title, image, description }, text }
 //   POST { image }  -> the picture's bytes (so the app can save the recipe photo)
+//   POST { product } -> { url, title, price, image } for an Amazon product link (short a.co links are followed)
+//   POST { instacart: { title, items } } -> { url } of an Instacart shopping list page.
+//        Needs the secret INSTACART_API_KEY (and INSTACART_ENV=development for a development key).
 //
 // Only signed-in users of the app can call it. The function checks the sign-in
 // itself, so turn "Verify JWT" OFF in the function's settings: Supabase's own check
@@ -99,14 +102,69 @@ async function signedIn(req: Request): Promise<boolean> {
   return res.ok;
 }
 
+// Best-effort product details. Amazon sometimes answers robots with a "sorry" page;
+// the final address (with the product id) is still useful then.
+async function product(raw: string) {
+  const url = checkUrl(raw);
+  const res = await get(url, 'text/html,application/xhtml+xml');
+  const finalUrl = res.url || url.href;
+  let title = '';
+  let price: number | null = null;
+  let image = '';
+  if (res.ok && /html/i.test(res.headers.get('content-type') || '')) {
+    const html = new TextDecoder().decode(await readLimited(res, MAX_PAGE));
+    title = decodeEntities(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || '').replace(/\s+/g, ' ').trim()
+      || metaTag(html, ['og:title', 'title'])
+      || decodeEntities(html.match(/<title[^>]*>([^<]*)/i)?.[1] || '').replace(/^Amazon\.[a-z.]+\s*:\s*/i, '').replace(/\s*:\s*[^:]*$/, '').trim();
+    const p = html.match(/"priceAmount"\s*:\s*([\d.]+)/)?.[1]
+      || html.match(/<span class=["']a-offscreen["']>\s*[^\d<]*([\d.,]+)/)?.[1];
+    if (p) {
+      const n = Number(/,\d{2}$/.test(p) ? p.replace(/\./g, '').replace(',', '.') : p.replace(/,/g, ''));
+      if (Number.isFinite(n) && n > 0) price = n;
+    }
+    image = metaTag(html, ['og:image']) || html.match(/data-old-hires=["']([^"']+)["']/i)?.[1] || '';
+  } else {
+    await res.body?.cancel();
+  }
+  return { url: finalUrl, title, price, image, status: res.status };
+}
+
+// Makes an Instacart shopping list page from the items.
+async function instacart(body: { title?: string; items?: unknown[] }) {
+  const key = Deno.env.get('INSTACART_API_KEY');
+  if (!key) return json({ error: 'Instacart isn’t set up', setup: true }, 501);
+  const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+  if (!items.length) return json({ error: 'Nothing to send' }, 400);
+  const dev = /^dev/i.test(Deno.env.get('INSTACART_ENV') || '');
+  const host = dev ? 'https://connect.dev.instacart.tools' : 'https://connect.instacart.com';
+  const res = await fetch(`${host}/idp/v1/products/products_link`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: String(body.title || 'Shopping list').slice(0, 100),
+      link_type: 'shopping_list',
+      expires_in: 30,
+      line_items: items,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.products_link_url) {
+    const msg = data?.error?.message || data?.errors?.[0]?.message || `Instacart answered ${res.status}`;
+    return json({ error: msg, status: res.status }, res.status === 401 || res.status === 403 ? 502 : 422);
+  }
+  return json({ url: data.products_link_url });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   if (!(await signedIn(req))) return json({ error: 'Sign in again' }, 401);
-  let body: { url?: string; image?: string };
+  let body: { url?: string; image?: string; product?: string; instacart?: { title?: string; items?: unknown[] } };
   try { body = await req.json(); } catch { return json({ error: 'Bad request' }, 400); }
 
   try {
+    if (body.instacart) return await instacart(body.instacart);
+    if (body.product) return json(await product(body.product));
     if (body.image) {
       const res = await get(checkUrl(body.image), 'image/avif,image/webp,image/jpeg,image/png,image/*');
       const type = res.headers.get('content-type') || '';

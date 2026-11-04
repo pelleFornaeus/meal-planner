@@ -97,7 +97,7 @@ test('ticks and extra items sync as their own records', () => {
   assert.deepEqual(other.shopping, s.shopping);
   applyRecord(other, 'k|f:milk', undefined);
   applyRecord(other, 'x|x1', undefined);
-  assert.deepEqual(other.shopping, { checked: {}, extras: [] });
+  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {} });
 });
 
 test('plain text copy', () => {
