@@ -14,7 +14,7 @@ import {
 import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
 import { yearRecap } from './recap.js';
 import {
-  addRecipeToList, amountText, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, setChecked, shoppingList,
+  addRecipeToList, amountText, clearShopping, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals,
 } from './shopping.js';
 import {
   clockText, copyWeek, cookDates, lastCooked, pickSurprise, stepTimers,
@@ -468,7 +468,7 @@ function renderShop() {
       ${g.total ? '<button class="btn small" data-act="shop-share">Copy list</button>' : ''}
     </header>
     ${shopSwitch()}
-    ${renderListRecipes()}
+    ${renderListRecipes(g)}
     <div class="card shop-range">
       <div class="shop-range-row">
         <label class="field"><span>From</span><input id="shop-from" type="date" value="${from}" /></label>
@@ -522,19 +522,24 @@ function renderShop() {
   `;
 }
 
-// Recipes added to the list without planning them.
-function renderListRecipes() {
-  const adds = (S().shopping?.recipes || []).map((a) => ({ a, r: findRecipe(S(), a.recipeId) })).filter((x) => x.r);
-  if (!adds.length) return '';
+// The recipes this list is for, each with × to take it off, and Clear list.
+function renderListRecipes(g) {
+  const recs = g.list.recipes;
+  const skipped = g.list.skipped.length;
+  if (!recs.length && !skipped && !g.total) return '';
   return `
     <div class="card list-recipes">
-      <span class="field-label">Also shopping for (not planned)</span>
-      <ul class="mini-list">${adds.map(({ a, r }) => {
-        const portions = Math.round(servingsOf(r) * (Number(a.scale) || 1) * 10) / 10;
+      <div class="card-head">
+        <span class="field-label">${recs.length ? 'Recipes on this list' : 'Nothing on the list'}</span>
+        ${g.total ? '<button class="link danger" data-act="shop-clear">Clear list</button>' : ''}
+      </div>
+      ${recs.length ? `<ul class="mini-list">${recs.map(({ recipe: r, cooks }) => {
+        const when = cooks.map((c) => `${c.date ? shortDay(c.date) : 'not planned'}${c.scale !== 1 ? ` ×${fmtQty(c.scale)}` : ''}`).join(', ');
         return `<li><button class="link-ish" data-act="view-recipe" data-id="${r.id}">${esc(r.name)}</button>
-          <span class="meta">${fmtQty(portions)} portion${portions === 1 ? '' : 's'}</span>
-          <button class="icon-btn small" data-act="shop-remove-recipe" data-id="${a.id}" aria-label="Take ${esc(r.name)} off the list">×</button></li>`;
-      }).join('')}</ul>
+          <span class="meta">${esc(when)}</span>
+          <button class="icon-btn small" data-act="shop-remove-recipe" data-recipe="${r.id}" aria-label="Take ${esc(r.name)} off the list">×</button></li>`;
+      }).join('')}</ul>` : ''}
+      ${skipped ? `<p class="hint flush">${skipped} planned meal${skipped === 1 ? ' is' : 's are'} left off this list (still in your plan). <button class="link" data-act="shop-unskip">Put back</button></p>` : ''}
     </div>`;
 }
 
@@ -3071,7 +3076,26 @@ function onClick(e) {
         store.save();
       }
       break;
-    case 'shop-remove-recipe': removeRecipeFromList(st, el.dataset.id); store.save(); break;
+    case 'shop-remove-recipe': {
+      const { from, to } = shopRange();
+      removeRecipeFromShopping(st, el.dataset.recipe, from, to);
+      store.save();
+      break;
+    }
+    case 'shop-clear': {
+      const { from, to } = shopRange();
+      if (confirm('Clear the shopping list? Planned meals stay in your plan; they just leave this list. Items you added by hand are removed.')) {
+        clearShopping(st, from, to);
+        store.save();
+      }
+      break;
+    }
+    case 'shop-unskip': {
+      const { from, to } = shopRange();
+      skipMeals(st, shoppingList(st, from, to).skipped, false);
+      store.save();
+      break;
+    }
     case 'list-recipe': {
       const r = findRecipe(st, s.id);
       const scale = (s.servings || servingsOf(r)) / servingsOf(r);

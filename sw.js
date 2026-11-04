@@ -1,7 +1,7 @@
 // Lets the app open offline.
 // Online: always fetch the latest files (skipping the browser's short-term cache), so
 // every file comes from the same version. Offline or very slow: use the saved copy.
-const CACHE = 'meals-v11';
+const CACHE = 'meals-v12';
 const ASSETS = [
   './',
   'index.html',
