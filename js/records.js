@@ -8,6 +8,7 @@
 //   p|<date>|<entryId>    one meal or food on a day
 //   k|<itemKey>           a ticked-off shopping list item
 //   x|<id>                an extra item added to the shopping list by hand
+//   q|<id>                a recipe added to the shopping list without planning it
 //   l|<itemKey>           the Amazon product / Instacart search picked for a shopping item
 // Pure functions, so they can be tested without a browser.
 
@@ -26,6 +27,7 @@ export function flatten(state) {
   for (const [k, v] of Object.entries(shop.checked || {})) out[`k|${k}`] = v;
   for (const x of shop.extras || []) out[`x|${x.id}`] = x;
   for (const [k, v] of Object.entries(shop.links || {})) out[`l|${k}`] = v;
+  for (const q of shop.recipes || []) out[`q|${q.id}`] = q;
   return out;
 }
 
@@ -41,11 +43,17 @@ export function applyRecord(state, key, value) {
     else list.push(value);
   } else if (kind === 's') {
     if (value !== undefined) state.settings = { ...state.settings, ...value };
-  } else if (kind === 'k' || kind === 'x' || kind === 'l') {
+  } else if (kind === 'k' || kind === 'x' || kind === 'l' || kind === 'q') {
     if (!state.shopping) state.shopping = { checked: {}, extras: [], links: {} };
     const shop = state.shopping;
     if (!shop.links) shop.links = {};
-    if (kind === 'l') {
+    if (!shop.recipes) shop.recipes = [];
+    if (kind === 'q') {
+      const i = shop.recipes.findIndex((x) => x.id === a);
+      if (value === undefined) { if (i >= 0) shop.recipes.splice(i, 1); }
+      else if (i >= 0) shop.recipes[i] = value;
+      else shop.recipes.push(value);
+    } else if (kind === 'l') {
       const k = key.slice(2);
       if (value === undefined) delete shop.links[k];
       else shop.links[k] = value;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addEntry, defaultState, migrate, refOf } from '../js/model.js';
-import { amountText, listText, pruneChecks, setChecked, shoppingList } from '../js/shopping.js';
+import { addRecipeToList, amountText, listText, pruneChecks, removeRecipeFromList, setChecked, shoppingList } from '../js/shopping.js';
 import { applyRecord, flatten } from '../js/records.js';
 
 function kitchen() {
@@ -97,10 +97,38 @@ test('ticks and extra items sync as their own records', () => {
   assert.deepEqual(other.shopping, s.shopping);
   applyRecord(other, 'k|f:milk', undefined);
   applyRecord(other, 'x|x1', undefined);
-  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {} });
+  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {}, recipes: [] });
 });
 
 test('plain text copy', () => {
   assert.equal(listText([{ title: 'Dairy', items: [{ name: 'Milk', amount: '1 l' }, { name: 'Eggs', amount: '' }] }]),
     'Dairy\n- Milk (1 l)\n- Eggs');
+});
+
+test('a recipe can go on the list without a plan', () => {
+  const s = kitchen();
+  addEntry(s, '2026-11-02', { type: 'cook', slot: 'breakfast', recipeId: 'pancakes', scale: 1 });
+  const a = addRecipeToList(s, 'pancakes', 2, 'q1', '2026-11-01');
+  addRecipeToList(s, 'chili', 1, 'q2', '2026-11-01');
+  let list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(list.items.find((i) => i.name === 'Milk').amount, '900 ml');
+  assert.equal(list.items.find((i) => i.name === 'ground beef').amount, '500 g');
+  assert.deepEqual(list.recipes.find((r) => r.recipe.id === 'pancakes').cooks.map((c) => c.date), ['2026-11-02', null]);
+  // It's on any days' list, even with nothing planned.
+  assert.ok(shoppingList(s, '2026-12-01', '2026-12-07').items.some((i) => i.name === 'ground beef'));
+  // Ticks stick, even after the planned meals are in the past.
+  setChecked(s, 'f:milk', true, '2026-11-07');
+  setChecked(s, 'n:ground beef', true, '2026-11-07');
+  pruneChecks(s, '2026-11-20');
+  list = shoppingList(s, '2026-11-20', '2026-11-26');
+  assert.equal(list.items.find((i) => i.name === 'ground beef').done, true);
+  setChecked(s, 'n:ground beef', false, '2026-11-26');
+  assert.equal(shoppingList(s, '2026-11-20', '2026-11-26').items.find((i) => i.name === 'ground beef').done, false);
+  // Synced as its own record.
+  const other = defaultState();
+  for (const [k, v] of Object.entries(flatten(s))) applyRecord(other, k, v);
+  assert.deepEqual(other.shopping.recipes, s.shopping.recipes);
+  removeRecipeFromList(s, a.id);
+  removeRecipeFromList(s, 'q2');
+  assert.equal(shoppingList(s, '2026-12-01', '2026-12-07').items.length, 0);
 });
