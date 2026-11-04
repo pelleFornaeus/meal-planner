@@ -47,7 +47,7 @@ export function defaultState() {
     foods: [],
     plan: {},
     pantry: [],
-    shopping: { checked: {}, extras: [], links: {}, recipes: [] },
+    shopping: { checked: {}, extras: [], links: {}, recipes: [], skip: {} },
     settings: { currency: '$', weekStart: 1, slots: defaultSlots(), goals: {}, usdaKey: '', shopDays: 7 },
   };
 }
@@ -66,6 +66,7 @@ export function migrate(s) {
     extras: Array.isArray(shop.extras) ? shop.extras : [],
     links: shop.links && typeof shop.links === 'object' ? shop.links : {},
     recipes: Array.isArray(shop.recipes) ? shop.recipes : [],
+    skip: shop.skip && typeof shop.skip === 'object' ? shop.skip : {},
   };
   out.settings = { ...d.settings, ...(s.settings || {}) };
   if (!Array.isArray(out.settings.slots) || !out.settings.slots.length) out.settings.slots = d.settings.slots;

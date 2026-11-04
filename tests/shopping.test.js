@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addEntry, defaultState, migrate, refOf } from '../js/model.js';
-import { addRecipeToList, amountText, listText, pruneChecks, removeRecipeFromList, setChecked, shoppingList } from '../js/shopping.js';
+import { addRecipeToList, amountText, clearShopping, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals } from '../js/shopping.js';
 import { applyRecord, flatten } from '../js/records.js';
 
 function kitchen() {
@@ -97,7 +97,7 @@ test('ticks and extra items sync as their own records', () => {
   assert.deepEqual(other.shopping, s.shopping);
   applyRecord(other, 'k|f:milk', undefined);
   applyRecord(other, 'x|x1', undefined);
-  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {}, recipes: [] });
+  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {}, recipes: [], skip: {} });
 });
 
 test('plain text copy', () => {
@@ -131,4 +131,36 @@ test('a recipe can go on the list without a plan', () => {
   removeRecipeFromList(s, a.id);
   removeRecipeFromList(s, 'q2');
   assert.equal(shoppingList(s, '2026-12-01', '2026-12-07').items.length, 0);
+});
+
+test('take a recipe off the list, clear the list, and put meals back', () => {
+  const s = kitchen();
+  addEntry(s, '2026-11-02', { type: 'cook', slot: 'dinner', recipeId: 'chili', scale: 1 });
+  addEntry(s, '2026-11-03', { type: 'cook', slot: 'breakfast', recipeId: 'pancakes', scale: 1 });
+  addEntry(s, '2026-11-03', { type: 'food', slot: 'breakfast', name: 'Milk', amount: 200, unit: 'ml', foodId: 'milk' });
+  addRecipeToList(s, 'chili', 1, 'q1', '2026-11-01');
+  removeRecipeFromShopping(s, 'chili', '2026-11-01', '2026-11-07');
+  let list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.deepEqual(list.recipes.map((r) => r.recipe.id), ['pancakes']);
+  assert.equal(list.skipped.length, 1);
+  assert.equal(s.shopping.recipes.length, 0);
+  assert.equal(Object.keys(s.plan['2026-11-02']).length, 1, 'the plan is untouched');
+  // A new chili planned later still shows up.
+  addEntry(s, '2026-11-05', { type: 'cook', slot: 'dinner', recipeId: 'chili', scale: 1 });
+  assert.ok(shoppingList(s, '2026-11-01', '2026-11-07').items.some((i) => i.name === 'ground beef'));
+  s.shopping.extras.push({ id: 'x1', name: 'Paper towels' });
+  clearShopping(s, '2026-11-01', '2026-11-07');
+  list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(list.items.length, 0);
+  assert.equal(s.shopping.extras.length, 0);
+  // Synced
+  const other = defaultState();
+  for (const [k, v] of Object.entries(flatten(s))) applyRecord(other, k, v);
+  assert.deepEqual(other.shopping.skip, s.shopping.skip);
+  skipMeals(s, list.skipped, false);
+  assert.equal(shoppingList(s, '2026-11-01', '2026-11-07').recipes.length, 2);
+  // Old skips are tidied away.
+  skipMeals(s, ['2026-11-02|abc']);
+  pruneChecks(s, '2026-11-10');
+  assert.deepEqual(s.shopping.skip, {});
 });

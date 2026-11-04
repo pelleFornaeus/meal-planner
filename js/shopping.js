@@ -86,14 +86,20 @@ export function shoppingList(state, from, to) {
     if (part.recipeId) it.recipes.add(part.recipeId);
   };
 
+  // Planned meals taken off the list: "<date>|<entryId>" -> true
+  const skip = state.shopping?.skip || {};
+  const skipped = [];
+  const foodRefs = [];
   for (const date of daysBetween(from, to)) {
     for (const e of dayEntries(state, date)) {
+      const ref = `${date}|${e.id}`;
+      if ((e.type === 'cook' || e.type === 'food') && skip[ref]) { skipped.push(ref); continue; }
       if (e.type === 'cook') {
         const r = findRecipe(state, e.recipeId);
         if (!r) continue;
         const scale = Number(e.scale) || 1;
         if (!recipes.has(r.id)) recipes.set(r.id, { recipe: r, cooks: [] });
-        recipes.get(r.id).cooks.push({ date, scale });
+        recipes.get(r.id).cooks.push({ date, scale, ref });
         for (const ing of r.ingredients || []) {
           if (!String(ing.name || '').trim()) continue;
           const food = (ing.foodId && getFood(state, ing.foodId)) || findFood(state, ing.name);
@@ -107,6 +113,7 @@ export function shoppingList(state, from, to) {
           });
         }
       } else if (e.type === 'food') {
+        foodRefs.push(ref);
         const food = e.foodId ? getFood(state, e.foodId) : findFood(state, e.name);
         const key = food ? `f:${food.id}` : `n:${singular(norm(e.name))}`;
         add(key, { name: food ? food.name : e.name, food }, {
@@ -190,6 +197,8 @@ export function shoppingList(state, from, to) {
   return {
     items: list,
     recipes: [...recipes.values()].sort((a, b) => a.recipe.name.localeCompare(b.recipe.name)),
+    skipped,
+    foodRefs,
     cost: toBuy.filter((i) => !i.done).reduce((s, i) => s + (i.cost || 0), 0),
     unpriced: toBuy.filter((i) => !i.done && i.cost == null).length,
   };
@@ -204,6 +213,32 @@ export function setChecked(state, key, on, to) {
     if (on) a.bought = { ...(a.bought || {}), [key]: true };
     else if (a.bought?.[key]) { a.bought = { ...a.bought }; delete a.bought[key]; }
   }
+}
+
+// Take planned meals off the shopping list (the plan stays as it is), or put them back.
+export function skipMeals(state, refs, on = true) {
+  if (!state.shopping) state.shopping = { checked: {}, extras: [] };
+  if (!state.shopping.skip) state.shopping.skip = {};
+  for (const ref of refs) {
+    if (on) state.shopping.skip[ref] = true;
+    else delete state.shopping.skip[ref];
+  }
+}
+
+// Take one recipe off the list: its planned batches in these days and any unplanned copies.
+export function removeRecipeFromShopping(state, recipeId, from, to) {
+  const rec = shoppingList(state, from, to).recipes.find((x) => x.recipe.id === recipeId);
+  skipMeals(state, (rec?.cooks || []).filter((c) => c.ref).map((c) => c.ref));
+  if (state.shopping.recipes) state.shopping.recipes = state.shopping.recipes.filter((a) => a.recipeId !== recipeId);
+}
+
+// Empty the list for these days: planned meals are taken off (not deleted from the plan),
+// unplanned recipes and extra items are removed.
+export function clearShopping(state, from, to) {
+  const list = shoppingList(state, from, to);
+  skipMeals(state, [...list.recipes.flatMap((x) => x.cooks.filter((c) => c.ref).map((c) => c.ref)), ...list.foodRefs]);
+  state.shopping.recipes = [];
+  state.shopping.extras = [];
 }
 
 // Put a recipe on the shopping list without planning it.
@@ -224,6 +259,8 @@ export function removeRecipeFromList(state, addId) {
 export function pruneChecks(state, today) {
   const checked = state.shopping?.checked || {};
   for (const [k, v] of Object.entries(checked)) if (!v || v.upto < today) delete checked[k];
+  const skip = state.shopping?.skip || {};
+  for (const k of Object.keys(skip)) if (k.split('|')[0] < today) delete skip[k];
 }
 
 export function defaultRange(today, days = 7) {
