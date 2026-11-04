@@ -5,6 +5,12 @@ import { lookupBarcode, searchFoods } from './lookup.js';
 import { startScanner } from './scanner.js';
 import { fromPage, fromText } from './importer.js';
 import {
+  matchFood, parseReceipt, priceTrend, rememberReceiptName, setPrice, unitLabel, unitPrice,
+} from './receipt.js';
+import { readImageText } from './ocr.js';
+import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
+import { yearRecap } from './recap.js';
+import {
   amountText, guessStaple, itemKey, listText, pruneChecks, setChecked, shoppingList,
 } from './shopping.js';
 import {
@@ -150,6 +156,8 @@ function renderPlan() {
         ${week.plannedDays && week.total.items - week.total.missingNutrition > 0 ? `<span><strong>${esc(kcal(week.total.cal / week.plannedDays))}</strong> a day on average</span>` : ''}
         <button class="link" data-act="go-summary">Details</button>
       </div>` : `<p class="hint center">Tap <strong>+</strong> on a meal to plan it. Add recipes in the Recipes tab.</p>`}
+    ${S().recipes.length ? `<div class="plan-tools"><button class="btn small" data-act="autoplan">✨ Auto-plan this week</button></div>` : ''}
+    ${renderUseItUp(true)}
     <div class="days">
       ${daysBetween(from, to).map((d) => renderDay(d, t)).join('')}
     </div>
@@ -361,7 +369,10 @@ function renderFoods() {
   return `
     <header class="page-header">
       <h1>Foods</h1>
-      <button class="btn primary" data-act="food-add">+ Add</button>
+      <div class="btn-row">
+        <button class="btn" data-act="receipt-open">Scan receipt</button>
+        <button class="btn primary" data-act="food-add">+ Add</button>
+      </div>
     </header>
     ${recipesSwitch()}
     <p class="hint">Foods you’ve looked up or typed in, with their nutrition, sizes and price. Recipes and quick-adds use these to fill in the numbers.</p>
@@ -371,7 +382,7 @@ function renderFoods() {
         <li><button class="food-row" data-act="food-edit" data-id="${f.id}">
           <span class="entry-main">
             <span class="title">${esc(f.name)}${f.brand ? ` <span class="muted">· ${esc(f.brand)}</span>` : ''}</span>
-            <span class="meta">${esc(foodFacts(f))}${priceText(f) ? ` · ${esc(priceText(f))}` : ''}</span>
+            <span class="meta">${esc(foodFacts(f))}${priceText(f) ? ` · ${esc(priceText(f))}` : ''} ${trendBadge(f)}</span>
           </span>
           <span class="badge">${esc(f.section || 'Other')}</span>
         </button></li>`).join('')}</ul>` : '<p class="empty">No foods match.</p>'}
@@ -502,6 +513,7 @@ function renderShop() {
       <button class="btn primary" type="submit">Add</button>
     </form>
     ${(st.shopping?.extras || []).some((x) => x.checked) ? '<p class="hint center"><button class="link" data-act="shop-clear-extras">Remove ticked extra items</button></p>' : ''}
+    <p class="hint center"><button class="link" data-act="receipt-open">Back from the store? Scan the receipt to update prices</button></p>
   `;
 }
 
@@ -569,6 +581,7 @@ function renderPantry() {
       ${staples.length ? `<h2 class="section">Always have</h2><ul class="food-list shop-list">${staples.map(row).join('')}</ul>` : ''}
       ${other.length ? `<h2 class="section">In the pantry and fridge</h2><ul class="food-list shop-list">${other.map(row).join('')}</ul>` : ''}
     ` : '<p class="empty">Nothing here yet. You can also tap the house button next to an item on the shopping list.</p>'}
+    ${list.length ? renderUseItUp(false) : ''}
   `;
 }
 
@@ -615,6 +628,7 @@ function summaryRange() {
 }
 
 function renderSummary() {
+  if (ui.summaryMode === 'year') return renderYear();
   const { from, to, label } = summaryRange();
   const r = rangeTotals(S(), from, to);
   const tot = r.total;
@@ -626,6 +640,7 @@ function renderSummary() {
     <div class="seg" role="tablist">
       <button class="${ui.summaryMode === 'week' ? 'on' : ''}" data-act="summary-mode" data-mode="week">Week</button>
       <button class="${ui.summaryMode === 'month' ? 'on' : ''}" data-act="summary-mode" data-mode="month">Month</button>
+      <button class="${ui.summaryMode === 'year' ? 'on' : ''}" data-act="summary-mode" data-mode="year">Year in food</button>
     </div>
     <header class="day-header">
       <button class="icon-btn" data-act="summary-prev" aria-label="Previous">‹</button>
@@ -664,6 +679,69 @@ function renderSummary() {
           <tfoot><tr><th>Total</th><th>${Math.round(tot.cal).toLocaleString()}</th><th>${fmtNum(tot.protein, 0)} g</th><th>${fmtNum(tot.carbs, 0)} g</th><th>${fmtNum(tot.fat, 0)} g</th><th>${esc(money(tot.cost))}</th></tr></tfoot>
         </table>
       </div>
+    `}
+  `;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function renderYear() {
+  const year = (ui.summaryAnchor || today()).slice(0, 4);
+  const r = yearRecap(S(), year, today());
+  const isNow = year === today().slice(0, 4);
+  const top = r.topRecipes[0];
+  const W = 640;
+  const H = 150;
+  const max = Math.max(1, ...r.months.map((m) => m.cost));
+  const slot = W / 12;
+  return `
+    <header class="page-header"><h1>Summary</h1></header>
+    <div class="seg" role="tablist">
+      <button data-act="summary-mode" data-mode="week">Week</button>
+      <button data-act="summary-mode" data-mode="month">Month</button>
+      <button class="on" data-act="summary-mode" data-mode="year">Year in food</button>
+    </div>
+    <header class="day-header">
+      <button class="icon-btn" data-act="summary-prev" aria-label="Previous year">‹</button>
+      <div class="day-title"><h2 class="range-title">${esc(year)}${isNow ? ' so far' : ''}</h2></div>
+      <button class="icon-btn" data-act="summary-next" aria-label="Next year" ${isNow ? 'disabled' : ''}>›</button>
+    </header>
+    ${!r.meals ? '<p class="empty">Nothing planned in this year yet.</p>' : `
+      <div class="year-hero card">
+        ${top ? `
+          ${top.recipe?.photo && photoUrl(top.recipe.photo) ? `<img class="hero small" src="${esc(photoUrl(top.recipe.photo))}" alt="" />` : ''}
+          <span class="tile-label">Your dish of the year</span>
+          <strong class="year-dish">${esc(top.recipe?.name || '')}</strong>
+          <span class="tile-sub">cooked ${top.count} time${top.count === 1 ? '' : 's'}, ${fmtQty(top.portions)} portion${top.portions === 1 ? '' : 's'} eaten</span>` : '<strong class="year-dish">A year of quick meals</strong>'}
+      </div>
+      <div class="tiles">
+        <div class="tile"><span class="tile-label">Meals</span><strong>${r.meals.toLocaleString()}</strong><span class="tile-sub">on ${r.days} day${r.days === 1 ? '' : 's'}</span></div>
+        <div class="tile"><span class="tile-label">Batches cooked</span><strong>${r.batches.toLocaleString()}</strong><span class="tile-sub">${r.newRecipes.length} new recipe${r.newRecipes.length === 1 ? '' : 's'} tried</span></div>
+        <div class="tile"><span class="tile-label">Spent on food</span><strong>${esc(money(r.cost))}</strong><span class="tile-sub">${r.days ? `${esc(money(r.cost / r.days))} a day` : ''}</span></div>
+        <div class="tile"><span class="tile-label">Busiest month</span><strong>${r.busiestMonth != null ? MONTHS[r.busiestMonth] : '–'}</strong><span class="tile-sub">${r.busiestMonth != null ? `${r.months[r.busiestMonth].meals} meals` : ''}</span></div>
+      </div>
+      <div class="card">
+        <h2 class="section tight">Spent each month</h2>
+        <svg class="chart" viewBox="0 0 ${W} ${H + 24}" role="img" aria-label="Cost per month">
+          <line class="grid" x1="0" x2="${W}" y1="${H}" y2="${H}" />
+          ${r.months.map((m, i) => {
+            const h = (m.cost / max) * (H - 10);
+            const x = i * slot + slot * 0.2;
+            return `${h > 0 ? `<rect class="bar-fill" x="${x}" y="${H - h}" width="${slot * 0.6}" height="${h}" rx="3" />` : ''}
+              <text class="axis" x="${x + slot * 0.3}" y="${H + 18}" text-anchor="middle">${MONTHS[i].slice(0, 1)}</text>
+              <rect class="hit" x="${i * slot}" y="0" width="${slot}" height="${H}" data-tip="${esc(`${MONTHS[i]}: ${money(m.cost)}, ${m.meals} meals`)}" />`;
+          }).join('')}
+        </svg>
+      </div>
+      <div class="year-cols">
+        ${r.topRecipes.length ? `<div class="card"><h2 class="section tight">Most cooked</h2><ol class="rank">${r.topRecipes.map((x) => `<li><button class="link" data-act="view-recipe" data-id="${x.recipe?.id}">${esc(x.recipe?.name || '')}</button> <span class="muted">${x.count}×</span></li>`).join('')}</ol></div>` : ''}
+        ${r.topIngredients.length ? `<div class="card"><h2 class="section tight">Favourite ingredients</h2><ol class="rank">${r.topIngredients.map((x) => `<li>${esc(x.name)} <span class="muted">in ${x.count} batch${x.count === 1 ? '' : 'es'}</span></li>`).join('')}</ol></div>` : ''}
+      </div>
+      ${r.topRated || r.newRecipes.length ? `<div class="card">
+        ${r.topRated ? `<p class="flush-p"><strong>Top rated:</strong> ${esc(r.topRated.name)} ${'★'.repeat(r.topRated.rating)}</p>` : ''}
+        ${r.newRecipes.length ? `<p class="flush-p"><strong>New this year:</strong> ${esc(r.newRecipes.filter(Boolean).slice(0, 12).map((x) => x.name).join(', '))}${r.newRecipes.length > 12 ? '…' : ''}</p>` : ''}
+        ${r.cal ? `<p class="flush-p"><strong>Calories planned:</strong> ${Math.round(r.cal).toLocaleString()} kcal${r.cal > 2000 * 30 ? `, about ${Math.round(r.cal / 2000)} days of a 2,000 kcal diet` : ''}</p>` : ''}
+      </div>` : ''}
     `}
   `;
 }
@@ -865,6 +943,8 @@ function renderSheetInner() {
     'food-edit': renderFoodEdit,
     scan: renderScan,
     cook: renderCookSheet,
+    receipt: renderReceipt,
+    autoplan: renderAutoPlan,
     surprise: renderSurprise,
   }[s.kind](s);
   el.innerHTML = html;
@@ -1153,6 +1233,123 @@ function renderSurprise(s) {
           </div>`}
       </div>
     </div>`;
+}
+
+// ----- Use it up -----
+
+function renderUseItUp(compact) {
+  const soon = useSoon(S(), today());
+  if (compact && !soon.length) return '';
+  const ideas = useItUp(S(), today(), { limit: compact ? 3 : 6 });
+  if (compact && !ideas.some((x) => x.urgent.length)) {
+    return `<div class="card use-up"><p class="flush-p"><strong>Use it up:</strong> ${esc(soon.map((p) => `${p.name} (by ${shortDay(p.until)})`).join(', '))}. None of your recipes use ${soon.length === 1 ? 'it' : 'them'} yet.</p></div>`;
+  }
+  if (!ideas.length) return '';
+  return `
+    <div class="card use-up">
+      ${compact ? `<p class="flush-p"><strong>Use it up:</strong> ${esc(soon.map((p) => `${p.name} (by ${shortDay(p.until)})`).join(', '))}</p>` : '<h2 class="section tight">Recipes that use what you have</h2>'}
+      <ul class="pick-list">${ideas.map((x) => `
+        <li><button class="pick" data-act="view-recipe" data-id="${x.recipe.id}">
+          ${thumb(x.recipe.photo)}
+          <span class="entry-main"><span class="title">${esc(x.recipe.name)}</span>
+          <span class="meta">uses ${esc(x.uses.map((p) => p.name).join(', '))}${x.urgent.length ? ' <span class="badge warn">soon</span>' : ''}</span></span>
+        </button></li>`).join('')}</ul>
+    </div>`;
+}
+
+// ----- Auto-plan -----
+
+function fitsSlot(r, slotId) {
+  const mealGroup = S().categories.find((g) => g.id === 'meal' || /^meal/i.test(g.name));
+  const tagged = mealGroup && (r.tags || []).some((t) => mealGroup.options.some((o) => o.id === t));
+  if (tagged) {
+    const names = recipeTags(S(), r).map(({ option }) => option.name.toLowerCase());
+    const slot = slots().find((x) => x.id === slotId);
+    const n = (slot?.name || '').toLowerCase();
+    if (names.some((x) => x === n || `${x}s` === n || x === `${n}s`)) return true;
+    // A dinner recipe is fine for lunch too.
+    if (/lunch/.test(n) && names.includes('dinner')) return true;
+    return guessSlot(r) === slotId;
+  }
+  const n = (slots().find((x) => x.id === slotId)?.name || '').toLowerCase();
+  return !/breakfast|snack|dessert/.test(n);
+}
+
+function openAutoPlan() {
+  const days = weekDays(ui.week, today());
+  const sl = slots().filter((x) => /dinner/i.test(x.name)).map((x) => x.id);
+  const sh = {
+    kind: 'autoplan', key: key(),
+    days: days.length ? days : daysBetween(ui.week, addDays(ui.week, 6)),
+    slots: sl.length ? sl : [slots()[slots().length - 1].id],
+    leftovers: true, budgetText: S().settings.planBudget || '', plan: null,
+  };
+  openSheet(sh);
+  suggestPlan(sh);
+}
+
+function suggestPlan(s) {
+  s.plan = autoPlan(S(), {
+    days: s.days.slice().sort(), slots: s.slots, today: today(), fits: fitsSlot,
+    leftovers: s.leftovers, budget: parseQty(String(s.budgetText || '')) || null,
+  });
+  renderSheet();
+}
+
+function renderAutoPlan(s) {
+  const all = daysBetween(ui.week, addDays(ui.week, 6));
+  const tot = s.plan ? planTotals(S(), s.plan) : null;
+  const byDay = {};
+  for (const p of s.plan || []) (byDay[p.date] ||= []).push(p);
+  const order = Object.fromEntries(slots().map((x, i) => [x.id, i]));
+  return `
+    <div class="sheet">
+      ${sheetHeader('Auto-plan', { left: 'Cancel', right: s.plan?.length ? 'Add to plan' : '', rightAct: 'autoplan-apply' })}
+      <div class="sheet-body">
+        <p class="hint flush">Fills the empty meals with your recipes: favourites and dishes you haven’t had in a while, recipes that share ingredients (less waste), things in your pantry that need using, and your calorie goal and budget.</p>
+        <div class="card">
+          <span class="field-label">Days</span>
+          <div class="chips">${all.map((d) => `<button class="chip tiny${s.days.includes(d) ? ' on' : ''}" data-act="ap-day" data-date="${d}">${esc(shortDay(d).split(',')[0])}</button>`).join('')}</div>
+          <span class="field-label">Meals</span>
+          <div class="chips">${slots().map((x) => `<button class="chip tiny${s.slots.includes(x.id) ? ' on' : ''}" data-act="ap-slot" data-slot="${esc(x.id)}">${esc(x.name)}</button>`).join('')}</div>
+          <label class="field row"><input type="checkbox" id="ap-leftovers" ${s.leftovers ? 'checked' : ''} /> <span>Cook once, eat leftovers on the next days</span></label>
+          <label class="field inline"><span class="wide-label">Budget for these meals (${esc(S().settings.currency)})</span>
+            <input type="text" inputmode="decimal" id="ap-budget" value="${esc(s.budgetText)}" placeholder="Optional" /></label>
+        </div>
+        ${!s.plan ? '' : !s.plan.length ? '<p class="empty">Nothing to fill: those meals are already planned.</p>' : `
+          <div class="card-head"><h2 class="section tight">Suggested</h2><button class="btn small" data-act="autoplan-shuffle">↻ Shuffle</button></div>
+          <p class="hint flush">${esc([
+            `${s.plan.filter((p) => p.type === 'cook').length} to cook, ${s.plan.filter((p) => p.type === 'leftover').length} leftovers`,
+            tot.cost ? `about ${money(tot.cost)}${tot.unpriced ? ' (some without a price)' : ''}` : '',
+          ].filter(Boolean).join(' · '))}</p>
+          ${Object.keys(byDay).sort().map((d) => `
+            <div class="ap-day">
+              <strong>${esc(shortDay(d))}</strong>
+              <ul class="mini-list">${byDay[d].sort((a, b) => (order[a.slot] ?? 9) - (order[b.slot] ?? 9)).map((p) => {
+                const r = findRecipe(S(), p.recipeId);
+                return `<li>${esc(slotName(p.slot))}: ${esc(r?.name || '')} ${p.type === 'leftover' ? '<span class="badge">Leftovers</span>' : '<span class="badge cook">Cook</span>'}</li>`;
+              }).join('')}</ul>
+            </div>`).join('')}`}
+      </div>
+    </div>`;
+}
+
+function applyAutoPlan(s) {
+  const st = S();
+  const made = [];
+  for (const p of s.plan) {
+    if (p.type === 'cook') {
+      made.push({ p, e: addEntry(st, p.date, { type: 'cook', slot: p.slot, recipeId: p.recipeId, scale: 1 }) });
+    } else {
+      const src = made.find((m) => m.p === s.plan[p.from]);
+      if (src) made.push({ p, e: addEntry(st, p.date, { type: 'leftover', slot: p.slot, recipeId: p.recipeId, from: refOf(src.p.date, src.e.id) }) });
+    }
+  }
+  st.settings.planBudget = s.budgetText || '';
+  ui.sheets.pop();
+  store.save();
+  renderSheet();
+  toast(`Planned ${made.length} meal${made.length === 1 ? '' : 's'}`);
 }
 
 // A recipe tagged Breakfast goes to breakfast, and so on; otherwise dinner.
@@ -2136,6 +2333,7 @@ function renderFoodEdit(s) {
             <input type="text" class="short" data-bind="priceUnit" data-recalc value="${esc(d.priceUnit)}" placeholder="lb" list="units" aria-label="Unit" />
           </div>
           <p class="hint flush">${test != null ? `That’s ${esc(money(test))} per 100 ${isG ? 'g' : d.base}.` : 'What you pay at the store, e.g. 3.49 for 1 gal, or 5.99 for 1 lb.'}</p>
+          ${renderPriceHistory(getFood(S(), s.id))}
         </div>
 
         <div class="card">
@@ -2170,6 +2368,171 @@ function renderFoodEdit(s) {
     </div>`;
 }
 
+function trendBadge(f) {
+  const t = priceTrend(f);
+  if (!t || Math.abs(t.change) < 0.01) return '';
+  const up = t.change > 0;
+  return `<span class="badge ${up ? 'warn' : 'good'}" title="Since ${esc(t.from ? shortDate(t.from) : 'the first price')}">${up ? '▲' : '▼'} ${Math.round(Math.abs(t.change) * 100)}%</span>`;
+}
+
+function renderPriceHistory(f) {
+  const h = (f?.priceHistory || []).filter((p) => unitPrice(f, p) != null);
+  if (h.length < 2) return h.length ? '' : '';
+  const vals = h.map((p) => unitPrice(f, p));
+  const W = 300;
+  const H = 60;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const y = (v) => (max === min ? H / 2 : H - 6 - ((v - min) / (max - min)) * (H - 12));
+  const x = (i) => 6 + (i * (W - 12)) / (vals.length - 1);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  return `
+    <div class="price-history">
+      <div class="card-head"><span class="field-label">Price history ${trendBadge(f)}</span><span class="hint flush">${esc(unitLabel(f))}</span></div>
+      <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Price over time">
+        <polyline points="${pts}" />
+        ${vals.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" />`).join('')}
+      </svg>
+      <ul class="mini-list">${h.slice().reverse().slice(0, 8).map((p) => `<li>${esc(p.date ? shortDate(p.date) : 'Before')}${p.store ? ` · ${esc(p.store)}` : ''}: ${esc(money(Number(p.amount)))} for ${esc([fmtQty(Number(p.qty ?? 1)), p.unit].filter(Boolean).join(' '))} <span class="muted">(${esc(money(unitPrice(f, p)))})</span></li>`).join('')}</ul>
+    </div>`;
+}
+
+// ----- Receipts -----
+
+function openReceipt() {
+  openSheet({ kind: 'receipt', key: key(), stage: 'start', date: today(), store: S().settings.lastStore || '' });
+}
+
+function renderReceipt(s) {
+  const foods = S().foods.slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (s.stage === 'review') {
+    const used = s.rows.filter((r) => r.foodId).length;
+    return `
+      <div class="sheet">
+        ${sheetHeader('Receipt', { left: 'Back', right: used ? 'Save prices' : '', rightAct: 'receipt-save' })}
+        <div class="sheet-body">
+          <div class="two-col">
+            <label class="field"><span>Store</span><input type="text" id="rc-store" value="${esc(s.store)}" placeholder="Optional" /></label>
+            <label class="field"><span>Date</span><input type="date" id="rc-date" value="${esc(s.date)}" /></label>
+          </div>
+          <p class="hint">${s.rows.length} item${s.rows.length === 1 ? '' : 's'} found. Pick the food each line is, and how much you bought for that price. Lines you leave on “Skip” aren’t saved. The app remembers your picks for next time.</p>
+          <ul class="receipt-rows">
+            ${s.rows.map((r, i) => `
+              <li class="card receipt-row${r.foodId ? '' : ' skipped'}">
+                <div class="card-head"><span class="rc-name">${esc(r.name)}</span><strong>${esc(money(r.price))}</strong></div>
+                <select data-rc-food="${i}" aria-label="Food">
+                  <option value="">Skip</option>
+                  ${foods.map((f) => `<option value="${f.id}" ${r.foodId === f.id ? 'selected' : ''}>${esc(f.name)}${f.brand ? ` (${esc(f.brand)})` : ''}</option>`).join('')}
+                </select>
+                ${r.foodId ? `<div class="price-row"><span>for</span>
+                  <input type="text" inputmode="decimal" class="short" data-rc-qty="${i}" value="${esc(r.qty ?? '')}" aria-label="Amount" />
+                  <input type="text" class="short" data-rc-unit="${i}" value="${esc(r.unit || '')}" placeholder="lb" list="units" aria-label="Unit" />
+                  ${receiptChange(r)}</div>` : ''}
+              </li>`).join('')}
+          </ul>
+          <datalist id="units">${['g', 'kg', 'ml', 'l', 'oz', 'lb', 'gal', 'qt', 'cup', 'can', 'pack', 'piece', 'dozen'].map((u) => `<option value="${u}">`).join('')}</datalist>
+          ${!foods.length ? '<p class="hint">You have no foods in your list yet. Add foods under Recipes → Foods first, then their prices can come from receipts.</p>' : ''}
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="sheet">
+      ${sheetHeader('Scan a receipt')}
+      <div class="sheet-body">
+        <p class="hint flush">Take a photo of a grocery receipt and the app reads the prices, so your foods and recipes stay up to date. Lay it flat in good light.</p>
+        ${s.stage === 'reading' ? `
+          <div class="card center"><p><strong>Reading the receipt…</strong></p><div class="cook-progress"><span style="width:${Math.round((s.progress || 0) * 100)}%"></span></div>
+          <p class="hint flush">The first time takes a little longer while the reader loads.</p></div>` : `
+          <label class="btn primary wide">Take or choose a photo<input type="file" accept="image/*" data-file="receipt" hidden /></label>`}
+        ${s.error ? `<p class="hint error-text">${esc(s.error)}</p>` : ''}
+        <details class="paste"${s.pasteOpen ? ' open' : ''}>
+          <summary data-act="toggle-receipt-paste">Or paste the receipt text</summary>
+          <p class="hint flush">On iPhone you can open the photo, press and hold on the text, choose Select All, and Copy.</p>
+          <textarea rows="7" id="receipt-text" placeholder="MILK 1 GAL   3.49&#10;BANANAS     1.18">${esc(s.text || '')}</textarea>
+          <button class="btn small" data-act="receipt-read-text">Read these</button>
+        </details>
+      </div>
+    </div>`;
+}
+
+function receiptChange(r) {
+  const f = getFood(S(), r.foodId);
+  if (!f) return '';
+  const now = unitPrice(f, { amount: r.price, qty: parseQty(String(r.qty ?? '')) ?? 1, unit: r.unit });
+  const was = unitPrice(f);
+  if (now == null || was == null || !was) return now == null ? '<span class="hint flush">Can’t convert that unit.</span>' : '';
+  const ch = now / was - 1;
+  if (Math.abs(ch) < 0.01) return '<span class="badge">same price</span>';
+  return `<span class="badge ${ch > 0 ? 'warn' : 'good'}">${ch > 0 ? '▲' : '▼'} ${Math.round(Math.abs(ch) * 100)}%</span>`;
+}
+
+function receiptRows(text) {
+  const foods = S().foods;
+  return parseReceipt(text).map((l) => {
+    const f = matchFood(foods, l.name);
+    return {
+      name: l.name,
+      price: l.price,
+      foodId: f?.id || '',
+      qty: l.qty ?? f?.price?.qty ?? 1,
+      unit: l.qty ? l.unit : (f?.price?.unit || ''),
+    };
+  });
+}
+
+function showReceiptRows(s, text) {
+  s.rows = receiptRows(text);
+  if (!s.rows.length) {
+    s.stage = 'start';
+    s.error = 'Couldn’t find any prices in that. Try a sharper photo, or paste the text instead.';
+    s.pasteOpen = true;
+    s.text = text;
+  } else {
+    s.stage = 'review';
+    s.error = '';
+  }
+  renderSheet();
+}
+
+async function readReceiptPhoto(s, file) {
+  s.stage = 'reading';
+  s.progress = 0;
+  s.error = '';
+  renderSheet();
+  try {
+    const text = await readImageText(file, (p) => {
+      s.progress = p;
+      const bar = $('.sheet .cook-progress span');
+      if (bar) bar.style.width = `${Math.round(p * 100)}%`;
+    });
+    if (top() !== s) return;
+    showReceiptRows(s, text);
+  } catch (err) {
+    s.stage = 'start';
+    s.error = navigator.onLine ? (err.message || 'Couldn’t read that picture.') : 'The receipt reader needs the internet the first time.';
+    renderSheet();
+  }
+}
+
+function saveReceipt(s) {
+  const st = S();
+  const date = $('#rc-date')?.value || s.date || today();
+  const storeName = ($('#rc-store')?.value || '').trim();
+  let n = 0;
+  for (const r of s.rows) {
+    const f = r.foodId && getFood(st, r.foodId);
+    if (!f) continue;
+    setPrice(f, { amount: r.price, qty: parseQty(String(r.qty ?? '')) ?? 1, unit: (r.unit || '').trim() }, date, storeName);
+    rememberReceiptName(f, r.name);
+    n += 1;
+  }
+  if (storeName) st.settings.lastStore = storeName;
+  ui.sheets.pop();
+  store.save();
+  renderSheet();
+  toast(`Updated ${n} price${n === 1 ? '' : 's'}`);
+}
+
 function saveFoodEdit(s) {
   const d = s.draft;
   const f = getFood(S(), s.id);
@@ -2189,11 +2552,12 @@ function saveFoodEdit(s) {
     portions: d.portions
       .filter((x) => String(x.unit || '').trim() && Number(x.grams) > 0)
       .map((x) => ({ unit: normUnit(x.unit), grams: Number(x.grams) })),
-    price: amount != null ? { amount, qty: parseQty(d.priceQty) ?? 1, unit: (d.priceUnit || '').trim() } : null,
     serving: sq != null ? { qty: sq, unit: (d.servingUnit || '').trim() } : null,
     section: d.section || 'Other',
     updatedAt: Date.now(),
   });
+  if (amount != null) setPrice(f, { amount, qty: parseQty(d.priceQty) ?? 1, unit: (d.priceUnit || '').trim() }, today());
+  else f.price = null;
   ui.sheets.pop();
   store.save();
   renderSheet();
@@ -2310,6 +2674,7 @@ function onClick(e) {
     if (act === 'toggle-paste-all') s.pasteAllOpen = !s.pasteAllOpen;
     if (act === 'toggle-at-home') { ui.atHomeOpen = !ui.atHomeOpen; render(); return; }
     if (act === 'toggle-cook-ings') s.ingsOpen = !s.ingsOpen;
+    if (act === 'toggle-receipt-paste') s.pasteOpen = !s.pasteOpen;
     renderSheet();
     return;
   }
@@ -2445,6 +2810,24 @@ function onClick(e) {
     case 'shop-clear-extras': st.shopping.extras = st.shopping.extras.filter((x) => !x.checked); store.save(); break;
     case 'shop-share': shareShopList(); break;
     case 'shop-view': ui.shopView = el.dataset.view; render(); break;
+    case 'receipt-open': openReceipt(); break;
+    case 'autoplan': openAutoPlan(); break;
+    case 'autoplan-shuffle': suggestPlan(s); break;
+    case 'autoplan-apply': applyAutoPlan(s); break;
+    case 'ap-day': {
+      const d = el.dataset.date;
+      s.days = s.days.includes(d) ? s.days.filter((x) => x !== d) : [...s.days, d];
+      suggestPlan(s);
+      break;
+    }
+    case 'ap-slot': {
+      const id = el.dataset.slot;
+      s.slots = s.slots.includes(id) ? s.slots.filter((x) => x !== id) : [...s.slots, id];
+      suggestPlan(s);
+      break;
+    }
+    case 'receipt-read-text': s.text = $('#receipt-text')?.value || ''; showReceiptRows(s, s.text); break;
+    case 'receipt-save': saveReceipt(s); break;
     case 'pantry-have': {
       const p = addToPantry(el.dataset.name, el.dataset.food);
       if (p) p.key = el.dataset.key;
@@ -2464,7 +2847,8 @@ function onClick(e) {
     case 'summary-next': {
       const dir = act === 'summary-prev' ? -1 : 1;
       const anchor = ui.summaryAnchor || today();
-      if (ui.summaryMode === 'week') ui.summaryAnchor = addDays(anchor, 7 * dir);
+      if (ui.summaryMode === 'year') ui.summaryAnchor = `${Number(anchor.slice(0, 4)) + dir}-06-01`;
+      else if (ui.summaryMode === 'week') ui.summaryAnchor = addDays(anchor, 7 * dir);
       else {
         const d = fromKey(anchor);
         ui.summaryAnchor = dateKey(new Date(d.getFullYear(), d.getMonth() + dir, 1, 12));
@@ -2509,6 +2893,7 @@ function onClick(e) {
     case 'sheet-close':
       // "Back" from choosing leftovers returns to the recipe list.
       if (s?.kind === 'add' && s.choose && !s.fromView) { s.choose = null; renderSheet(); break; }
+      if (s?.kind === 'receipt' && s.stage === 'review') { s.stage = 'start'; renderSheet(); break; }
       closeSheet();
       break;
     case 'edit-recipe': openSheet({ kind: 'recipe-edit', draft: draftFrom(findRecipe(st, s.id)), key: key() }); break;
@@ -2841,6 +3226,23 @@ async function onChange(e) {
     return;
   }
   if (el.dataset.file === 'import' && el.files?.[0]) { importData(el.files[0]); return; }
+  if (el.dataset.file === 'receipt' && el.files?.[0]) { readReceiptPhoto(top(), el.files[0]); return; }
+  if (el.dataset.rcFood !== undefined) {
+    const sh = top();
+    const r = sh.rows[Number(el.dataset.rcFood)];
+    r.foodId = el.value;
+    const f = getFood(st, r.foodId);
+    if (f && !r.unit) { r.qty = f.price?.qty ?? 1; r.unit = f.price?.unit || ''; }
+    renderSheet();
+    return;
+  }
+  if (el.dataset.rcQty !== undefined || el.dataset.rcUnit !== undefined) {
+    const sh = top();
+    const i = Number(el.dataset.rcQty ?? el.dataset.rcUnit);
+    if (el.dataset.rcQty !== undefined) sh.rows[i].qty = el.value; else sh.rows[i].unit = el.value;
+    renderSheet();
+    return;
+  }
   if (el.dataset.file === 'photo' && el.files?.[0]) {
     const s = top();
     s.photoBusy = true;
@@ -2865,6 +3267,8 @@ async function onChange(e) {
     if (p) { p.until = el.value || null; store.save(); }
     return;
   }
+  if (el.id === 'ap-leftovers') { top().leftovers = el.checked; suggestPlan(top()); return; }
+  if (el.id === 'ap-budget') { suggestPlan(top()); return; }
   if (el.id === 'shop-from') { ui.shopFrom = el.value || null; render(); return; }
   if (el.id === 'shop-days') {
     const n = Math.max(1, Math.min(31, Math.round(Number(el.value)) || 7));
@@ -2917,6 +3321,10 @@ function onInput(e) {
   if (el.id === 'paste-ings') { top().pasteIngs = el.value; return; }
   if (el.id === 'paste-steps') { top().pasteSteps = el.value; return; }
   if (el.id === 'paste-all') { top().pasteAll = el.value; return; }
+  if (el.id === 'receipt-text') { top().text = el.value; return; }
+  if (el.id === 'rc-store') { top().store = el.value; return; }
+  if (el.id === 'ap-budget') { top().budgetText = el.value; return; }
+  if (el.id === 'rc-date') { top().date = el.value; return; }
   if (el.id === 'import-url') { top().importUrl = el.value; }
 }
 

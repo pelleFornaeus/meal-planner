@@ -613,3 +613,32 @@ h2.recipe-title { font-size: 20px; }
 .spin-name { font-size: 22px; font-weight: 600; min-height: 1.4em; text-align: center; margin: 0; }
 @keyframes roll { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin-die, .timer.ringing { animation: none; } }
+
+/* ---------- Prices and receipts ---------- */
+.badge.good { background: var(--green-soft); color: var(--green); }
+.price-history { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.spark { width: 100%; height: 60px; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.spark circle { fill: var(--accent); }
+.receipt-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.receipt-row { gap: 8px; margin: 0; }
+.receipt-row.skipped { opacity: .7; }
+.rc-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; overflow-wrap: anywhere; }
+.receipt-row select { padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; }
+.receipt-row .price-row input { width: 80px; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; }
+.card.center { text-align: center; align-items: stretch; }
+
+/* ---------- Auto-plan and use it up ---------- */
+.plan-tools { display: flex; justify-content: flex-end; gap: 8px; margin: 0 0 10px; }
+.use-up { background: var(--green-soft); border-color: transparent; }
+.use-up .pick-list { margin: 0; }
+.ap-day { padding: 8px 2px; border-top: 1px solid var(--line); }
+.ap-day .mini-list { margin: 4px 0 0; }
+
+/* ---------- Year in food ---------- */
+.year-hero { align-items: center; text-align: center; background: var(--accent-soft); border-color: transparent; }
+.year-hero .hero.small { width: 100%; }
+.year-dish { font-size: 28px; letter-spacing: -0.02em; }
+.year-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 12px; }
+.rank { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.icon-btn:disabled { opacity: .3; }
