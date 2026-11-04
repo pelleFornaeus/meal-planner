@@ -14,13 +14,13 @@ import {
 import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
 import { yearRecap } from './recap.js';
 import {
-  addRecipeToList, amountText, clearShopping, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals,
+  addRecipeToList, amountText, clearShopping, setSection, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals,
 } from './shopping.js';
 import {
   clockText, copyWeek, cookDates, lastCooked, pickSurprise, stepTimers,
 } from './extras.js';
 import {
-  SECTIONS, guessSection, normUnit, nutritionFor, perLabel, priceFor,
+  SECTIONS, foodSection, guessSection, normUnit, nutritionFor, perLabel, priceFor,
 } from './foods.js';
 import {
   addDays, dateKey, daysBetween, formatDay, fromKey, monthName, shortDate, shortDay, startOfWeek,
@@ -480,6 +480,7 @@ function renderShop() {
       <button class="${ui.shopGroup !== 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="section">By aisle</button>
       <button class="${ui.shopGroup === 'recipe' ? 'on' : ''}" data-act="shop-group" data-group="recipe">By recipe</button>
     </div>
+    ${ui.shopGroup !== 'recipe' && g.total ? `<p class="hint flush right"><button class="link" data-act="shop-aisles">${ui.fixAisles ? 'Done moving' : 'Wrong aisle? Move items'}</button></p>` : ''}
     ${recipeChips.length > 1 || (recipeChips.length && hasFoods) ? `
       <div class="chips shop-filter">
         <button class="chip tiny${!ui.shopRecipes.size ? ' on' : ''}" data-act="shop-filter" data-id="">All</button>
@@ -560,7 +561,8 @@ function renderShopItem(i) {
         </span>
         ${i.cost != null && !i.share ? `<span class="price">${esc(money(i.cost))}</span>` : ''}
       </button>
-      ${i.extra ? `<button class="icon-btn small" data-act="shop-remove-extra" data-id="${i.extraId}" aria-label="Remove ${esc(i.name)}">×</button>`
+      ${ui.fixAisles && !i.share ? `<select class="aisle-pick" data-shop-section="${esc(i.key)}" aria-label="Aisle for ${esc(i.name)}">${SECTIONS.map((x) => `<option ${i.section === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`
+        : i.extra ? `<button class="icon-btn small" data-act="shop-remove-extra" data-id="${i.extraId}" aria-label="Remove ${esc(i.name)}">×</button>`
         : i.done ? '' : `<button class="have-btn" data-act="pantry-have" data-key="${esc(i.key)}" data-name="${esc(i.name)}" data-food="${i.food?.id || ''}" title="I have this at home" aria-label="I have ${esc(i.name)} at home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z"/></svg></button>`}
     </li>`;
 }
@@ -2564,6 +2566,7 @@ function foodEditSheet(f) {
   d.priceUnit = d.price?.unit ?? (d.base === 'g' ? 'lb' : '');
   d.servingQty = d.serving?.qty != null ? fmtQty(Number(d.serving.qty)) : '';
   d.servingUnit = d.serving?.unit ?? '';
+  d.section = foodSection(f);
   return { kind: 'food-edit', id: f.id, draft: d, key: key() };
 }
 
@@ -2823,6 +2826,7 @@ function saveFoodEdit(s) {
       .map((x) => ({ unit: normUnit(x.unit), grams: Number(x.grams) })),
     serving: sq != null ? { qty: sq, unit: (d.servingUnit || '').trim() } : null,
     section: d.section || 'Other',
+    sectionSet: !!f.sectionSet || (d.section || 'Other') !== foodSection(f),
     updatedAt: Date.now(),
   });
   if (amount != null) setPrice(f, { amount, qty: parseQty(d.priceQty) ?? 1, unit: (d.priceUnit || '').trim() }, today());
@@ -3082,6 +3086,7 @@ function onClick(e) {
       store.save();
       break;
     }
+    case 'shop-aisles': ui.fixAisles = !ui.fixAisles; render(); break;
     case 'shop-clear': {
       const { from, to } = shopRange();
       if (confirm('Clear the shopping list? Planned meals stay in your plan; they just leave this list. Items you added by hand are removed.')) {
@@ -3541,6 +3546,18 @@ async function onChange(e) {
       }
     }
     if (el.dataset.recalc !== undefined) renderSheet();
+    return;
+  }
+  if (el.dataset.shopSection !== undefined) {
+    const k = el.dataset.shopSection;
+    if (k.startsWith('x:')) {
+      const x = st.shopping.extras.find((y) => y.id === k.slice(2));
+      if (x) x.section = el.value;
+    } else {
+      const item = shoppingList(st, shopRange().from, shopRange().to).items.find((i) => i.key === k);
+      if (item) setSection(st, item, el.value);
+    }
+    store.save();
     return;
   }
   if (el.dataset.icPrice !== undefined) {

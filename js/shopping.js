@@ -6,7 +6,7 @@ import {
   dayEntries, findFood, findRecipe, fmtQty, getFood,
 } from './model.js';
 import {
-  guessSection, isMass, isVolume, normUnit, plainGrams, priceFor, toBase,
+  foodSection, guessSection, isMass, isVolume, normUnit, plainGrams, priceFor, toBase,
 } from './foods.js';
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\|/g, ' ').replace(/\s+/g, ' ');
@@ -176,7 +176,7 @@ export function shoppingList(state, from, to) {
       key: it.key,
       name: it.name,
       food: food || null,
-      section: food?.section || guessSection(it.name),
+      section: food ? foodSection(food) : (state.shopping?.sections?.[it.key] || guessSection(it.name)),
       amount: amountText(it.parts, food),
       cost,
       recipes: [...it.recipes],
@@ -239,6 +239,19 @@ export function clearShopping(state, from, to) {
   skipMeals(state, [...list.recipes.flatMap((x) => x.cooks.filter((c) => c.ref).map((c) => c.ref)), ...list.foodRefs]);
   state.shopping.recipes = [];
   state.shopping.extras = [];
+}
+
+// Move an item to another aisle. Saved foods remember it themselves.
+export function setSection(state, item, section) {
+  if (item.food) {
+    item.food.section = section;
+    item.food.sectionSet = true;
+    item.food.updatedAt = Date.now();
+    return;
+  }
+  if (!state.shopping.sections) state.shopping.sections = {};
+  if (section === guessSection(item.name)) delete state.shopping.sections[item.key];
+  else state.shopping.sections[item.key] = section;
 }
 
 // Put a recipe on the shopping list without planning it.

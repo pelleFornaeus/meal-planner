@@ -9,6 +9,7 @@
 //   k|<itemKey>           a ticked-off shopping list item
 //   x|<id>                an extra item added to the shopping list by hand
 //   z|<date>|<entryId>   a planned meal taken off the shopping list
+//   g|<itemKey>           the aisle you moved a shopping item to
 //   q|<id>                a recipe added to the shopping list without planning it
 //   l|<itemKey>           the Amazon product / Instacart search picked for a shopping item
 // Pure functions, so they can be tested without a browser.
@@ -29,6 +30,7 @@ export function flatten(state) {
   for (const x of shop.extras || []) out[`x|${x.id}`] = x;
   for (const [k, v] of Object.entries(shop.links || {})) out[`l|${k}`] = v;
   for (const q of shop.recipes || []) out[`q|${q.id}`] = q;
+  for (const [k, v] of Object.entries(shop.sections || {})) out[`g|${k}`] = v;
   for (const k of Object.keys(shop.skip || {})) out[`z|${k}`] = true;
   return out;
 }
@@ -45,13 +47,18 @@ export function applyRecord(state, key, value) {
     else list.push(value);
   } else if (kind === 's') {
     if (value !== undefined) state.settings = { ...state.settings, ...value };
-  } else if (kind === 'k' || kind === 'x' || kind === 'l' || kind === 'q' || kind === 'z') {
+  } else if (kind === 'k' || kind === 'x' || kind === 'l' || kind === 'q' || kind === 'z' || kind === 'g') {
     if (!state.shopping) state.shopping = { checked: {}, extras: [], links: {} };
     const shop = state.shopping;
     if (!shop.links) shop.links = {};
     if (!shop.recipes) shop.recipes = [];
     if (!shop.skip) shop.skip = {};
-    if (kind === 'z') {
+    if (!shop.sections) shop.sections = {};
+    if (kind === 'g') {
+      const k = key.slice(2);
+      if (value === undefined) delete shop.sections[k];
+      else shop.sections[k] = value;
+    } else if (kind === 'z') {
       const k = key.slice(2);
       if (value === undefined) delete shop.skip[k];
       else shop.skip[k] = true;
