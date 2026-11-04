@@ -141,3 +141,22 @@ test('a food on a day follows later price changes', async () => {
   assert.equal(dayTotals(s, '2026-11-02').cost, 0.18);
   assert.equal(dayTotals(s, '2026-11-02').cal, 122);
 });
+
+test('aisles go by what the thing is, not by describing words', () => {
+  const cases = {
+    'minced garlic': 'Produce', 'cayenne pepper': 'Spices', 'garlic powder': 'Spices', 'chili powder': 'Spices',
+    'ground beef': 'Meat & fish', 'ground cumin': 'Spices', 'beef broth': 'Pantry', 'diced tomatoes': 'Pantry',
+    'tomato paste': 'Pantry', 'red pepper flakes': 'Spices', 'sour cream': 'Dairy & eggs', 'lime juice': 'Produce',
+    'olive oil': 'Pantry', 'garlic cloves': 'Produce', 'ground cloves': 'Spices', 'shredded cheddar cheese': 'Dairy & eggs',
+    'Beef, ground, 80% lean meat / 20% fat, raw': 'Meat & fish', 'Peppers, sweet, red, raw': 'Produce', 'Spices, pepper, black': 'Spices',
+    'jalapeño': 'Produce', 'cocoa powder': 'Pantry',
+  };
+  for (const [name, section] of Object.entries(cases)) assert.equal(guessSection(name), section, name);
+});
+
+test('saved foods use the newest guess unless you picked an aisle', async () => {
+  const { foodSection } = await import('../js/foods.js');
+  assert.equal(foodSection({ name: 'Minced garlic', section: 'Meat & fish' }), 'Produce');
+  assert.equal(foodSection({ name: 'Minced garlic', section: 'Spices', sectionSet: true }), 'Spices');
+  assert.equal(foodSection({ name: 'Zzz brand thing', section: 'Snacks' }), 'Snacks');
+});

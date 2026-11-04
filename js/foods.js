@@ -113,23 +113,63 @@ export const SECTIONS = [
   'Produce', 'Meat & fish', 'Dairy & eggs', 'Bakery', 'Pantry', 'Spices', 'Frozen', 'Drinks', 'Snacks', 'Household', 'Other',
 ];
 
+// Words that point to an aisle. The word that comes last in a name usually says
+// what the thing is ("garlic powder" is a powder, "chicken stock" is stock),
+// so the latest match wins, not the first.
 const SECTION_WORDS = [
-  ['Household', /\b(paper towel|toilet paper|tissues|napkins|soap|detergent|dish ?washer|sponge|trash bag|bin bag|garbage bag|foil|cling film|plastic wrap|baking paper|parchment|shampoo|toothpaste|batteries)/],
-  ['Spices', /\b(salt|black pepper|cumin|paprika|cinnamon|oregano|thyme|chili powder|chilli powder|curry|turmeric|nutmeg|spice|seasoning|bay lea|vanilla)\b/],
-  ['Frozen', /\bfrozen\b/],
-  ['Dairy & eggs', /\b(milk|cheese|cheddar|mozzarella|parmesan|feta|yog(h)?urt|butter|cream|egg|eggs)\b/],
-  ['Meat & fish', /\b(chicken|beef|pork|turkey|lamb|bacon|sausage|ham|steak|mince|ground (beef|turkey|pork)|fish|salmon|tuna|cod|shrimp|prawn)/],
-  ['Bakery', /\b(bread|bagel|tortilla|bun|buns|roll|rolls|croissant|pita|naan)\b/],
-  ['Drinks', /\b(juice|soda|coffee|tea|water|beer|wine)\b/],
-  ['Snacks', /\b(chips|crisps|cookie|cookies|chocolate|candy|crackers|popcorn)\b/],
-  ['Produce', /\b(apple|banana|onion|garlic|tomato|potato|carrot|lettuce|spinach|kale|pepper|bell pepper|lemon|lime|orange|berries|berry|strawberr|blueberr|avocado|cucumber|broccoli|cauliflower|zucchini|mushroom|celery|cilantro|parsley|basil|ginger|grape|pear|peach|cabbage|corn|scallion|leek|squash)/],
-  ['Pantry', /\b(rice|pasta|spaghetti|noodle|flour|sugar|oil|vinegar|beans|lentils|chickpea|can|canned|sauce|stock|broth|cereal|oats|oatmeal|cheerios|honey|syrup|peanut butter|jam|nuts|almond|ketchup|mustard|mayo)/],
+  ['Household', /\b(paper towels?|toilet paper|tissues|napkins|soap|detergent|dish ?washer|sponges?|trash bags?|bin bags?|garbage bags?|foil|cling film|plastic wrap|baking paper|parchment|shampoo|toothpaste|batteries)\b/g],
+  ['Spices', /\b(salt|pepper ?corns?|cumin|paprika|cinnamon|oregano|thyme|curry|turmeric|nutmeg|spices?|seasoning|bay lea(f|ves)|vanilla|cayenne|powder|flakes|coriander|cardamom|allspice|cloves|garam masala|chipotle)\b/g],
+  ['Frozen', /\bfrozen\b/g],
+  ['Dairy & eggs', /\b(milk|cheeses?|cheddar|mozzarella|parmesan|feta|yog(h)?urts?|butter|cream|eggs?)\b/g],
+  ['Meat & fish', /\b(chicken|beef|pork|turkey|lamb|bacon|sausages?|ham|steaks?|mince|meat|fish|salmon|tuna|cod|shrimps?|prawns?|chorizo|thighs?|breasts?|drumsticks?)\b/g],
+  ['Bakery', /\b(bread|bagels?|tortillas?|buns?|rolls?|croissants?|pitas?|naan)\b/g],
+  ['Drinks', /\b(juice|soda|coffee|tea|water|beer|wine)\b/g],
+  ['Snacks', /\b(chips|crisps|cookies?|chocolate|candy|crackers?|popcorn)\b/g],
+  ['Produce', /\b(apples?|bananas?|onions?|garlic|tomato(es)?|potato(es)?|carrots?|lettuce|spinach|kale|peppers?|lemons?|limes?|oranges?|berries|berry|strawberr(y|ies)|blueberr(y|ies)|avocados?|cucumbers?|broccoli|cauliflower|zucchinis?|courgettes?|mushrooms?|celery|cilantro|coriander leaves|parsley|basil|mint|ginger|grapes?|pears?|peach(es)?|cabbage|corn|scallions?|green onions?|leeks?|squash|jalape(n|ñ)os?|chil(e|i)s|shallots?|herbs?)\b/g],
+  ['Pantry', /\b(rice|pasta|spaghetti|noodles?|flour|sugar|oil|vinegar|beans|lentils|chickpeas?|cans?|canned|sauce|paste|stock|broth|bouillon|cereal|oats|oatmeal|cheerios|honey|syrup|jam|nuts|almonds?|ketchup|mustard|mayo|mayonnaise|salsa|masa|cornmeal|cornstarch|baking soda|baking powder|cocoa)\b/g],
 ];
 
+// Names that the last-word rule gets wrong.
+const SECTION_PHRASES = [
+  ['Spices', /\b((cayenne|black|white|ground|lemon) pepper|red pepper flakes|crushed red pepper|chil(i|li|e) powder|chil(i|li|e) flakes|italian seasoning|sea salt|kosher salt)\b/],
+  ['Pantry', /\b((diced|crushed|canned|stewed|fire[- ]roasted|sun[- ]dried) tomato(es)?|tomato (paste|sauce|puree|purée)|(coconut|condensed|evaporated) milk|peanut butter|(beef|chicken|vegetable|fish) (stock|broth|bouillon)|stock cubes?|baking (soda|powder)|corn ?(starch|meal|flour)|cocoa (powder)?|(soy|hot|fish|worcestershire|bbq|barbecue) sauce|(olive|vegetable|canola|sesame|coconut) oil|chil(i|li|e) beans|refried beans|tortilla chips|chipotles? in adobo)\b/],
+  ['Produce', /\b((lemon|lime) (juice|zest))\b/],
+  ['Dairy & eggs', /\b(sour cream|cream cheese|heavy cream|whipping cream|half and half|greek yog(h)?urt)\b/],
+  ['Produce', /\b(bell peppers?|chil(i|li|e) peppers?|green chil(e|i)s?|red chil(e|i)s?|garlic cloves?|cloves? (of )?garlic|fresh (herbs|thyme|rosemary|oregano|dill|sage|coriander))\b/],
+];
+
+// "minced garlic" is garlic: describing words don't count.
+const PREP_WORDS = /\b(minced|chopped|diced|sliced|grated|shredded|crushed|dried|large|small|medium|finely|roughly|thinly|freshly|peeled|organic|boneless|skinless|raw|cooked|lean|extra|virgin)\b/g;
+
+function guessOne(text) {
+  const s = String(text || '').toLowerCase().replace(/[()]/g, ' ');
+  for (const [section, re] of SECTION_PHRASES) if (re.test(s)) return section;
+  const plain = s.replace(PREP_WORDS, ' ');
+  let best = null;
+  for (const [section, re] of SECTION_WORDS) {
+    re.lastIndex = 0;
+    for (const m of plain.matchAll(re)) {
+      if (!best || m.index >= best.at) best = { section, at: m.index };
+    }
+  }
+  return best ? best.section : 'Other';
+}
+
+// The store aisle for a name. "Beef, ground, raw" (food database style) goes by the part before the comma.
 export function guessSection(name) {
-  const s = String(name || '').toLowerCase();
-  for (const [section, re] of SECTION_WORDS) if (re.test(s)) return section;
-  return 'Other';
+  const s = String(name || '');
+  if (s.includes(',')) {
+    const first = guessOne(s.split(',')[0]);
+    if (first !== 'Other') return first;
+  }
+  return guessOne(s);
+}
+
+// A saved food's aisle: the one you picked, else today's best guess from its name.
+export function foodSection(food) {
+  if (food.sectionSet && food.section) return food.section;
+  const g = guessSection(food.name);
+  return g !== 'Other' ? g : (food.section || 'Other');
 }
 
 // ---------- Foods from the online databases ----------
@@ -157,7 +197,7 @@ export function fromOpenFoodFacts(p) {
     per: 100,
     nutrition,
     portions: [],
-    section: guessSection(`${name} ${p.categories || ''}`),
+    section: guessSection(name) !== 'Other' ? guessSection(name) : guessSection(p.categories || ''),
   };
   const sq = Number(p.serving_quantity);
   if (sq > 0) {

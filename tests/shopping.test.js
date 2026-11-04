@@ -97,7 +97,7 @@ test('ticks and extra items sync as their own records', () => {
   assert.deepEqual(other.shopping, s.shopping);
   applyRecord(other, 'k|f:milk', undefined);
   applyRecord(other, 'x|x1', undefined);
-  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {}, recipes: [], skip: {} });
+  assert.deepEqual(other.shopping, { checked: {}, extras: [], links: {}, recipes: [], skip: {}, sections: {} });
 });
 
 test('plain text copy', () => {
@@ -163,4 +163,21 @@ test('take a recipe off the list, clear the list, and put meals back', () => {
   skipMeals(s, ['2026-11-02|abc']);
   pruneChecks(s, '2026-11-10');
   assert.deepEqual(s.shopping.skip, {});
+});
+
+test('items can be moved to another aisle', async () => {
+  const { setSection } = await import('../js/shopping.js');
+  const s = kitchen();
+  addEntry(s, '2026-11-02', { type: 'cook', slot: 'dinner', recipeId: 'chili', scale: 1 });
+  addEntry(s, '2026-11-03', { type: 'cook', slot: 'breakfast', recipeId: 'pancakes', scale: 1 });
+  const list = shoppingList(s, '2026-11-01', '2026-11-07');
+  setSection(s, list.items.find((i) => i.name === 'onion'), 'Other');
+  setSection(s, list.items.find((i) => i.name === 'Milk'), 'Drinks');
+  const again = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(again.items.find((i) => i.name === 'onion').section, 'Other');
+  assert.equal(again.items.find((i) => i.name === 'Milk').section, 'Drinks');
+  assert.equal(s.foods[0].sectionSet, true);
+  const other = defaultState();
+  for (const [k, v] of Object.entries(flatten(s))) applyRecord(other, k, v);
+  assert.deepEqual(other.shopping.sections, { 'n:onion': 'Other' });
 });
