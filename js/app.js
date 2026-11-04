@@ -14,7 +14,7 @@ import {
 import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
 import { yearRecap } from './recap.js';
 import {
-  amountText, guessStaple, itemKey, listText, pruneChecks, setChecked, shoppingList,
+  addRecipeToList, amountText, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, setChecked, shoppingList,
 } from './shopping.js';
 import {
   clockText, copyWeek, cookDates, lastCooked, pickSurprise, stepTimers,
@@ -425,7 +425,7 @@ function shopGroups() {
   if (ui.shopGroup === 'recipe') {
     groups = list.recipes.filter((r) => !picked.size || picked.has(r.recipe.id)).map(({ recipe, cooks }) => ({
       title: recipe.name,
-      sub: cooks.map((c) => `${shortDay(c.date)}${c.scale !== 1 ? ` ×${fmtQty(c.scale)}` : ''}`).join(', '),
+      sub: cooks.map((c) => `${c.date ? shortDay(c.date) : 'not planned'}${c.scale !== 1 ? ` ×${fmtQty(c.scale)}` : ''}`).join(', '),
       items: items.filter((i) => i.recipes.includes(recipe.id)).map((i) => {
         // Just this recipe's share of the item.
         const parts = i.parts.filter((p) => p.recipeId === recipe.id);
@@ -468,6 +468,7 @@ function renderShop() {
       ${g.total ? '<button class="btn small" data-act="shop-share">Copy list</button>' : ''}
     </header>
     ${shopSwitch()}
+    ${renderListRecipes()}
     <div class="card shop-range">
       <div class="shop-range-row">
         <label class="field"><span>From</span><input id="shop-from" type="date" value="${from}" /></label>
@@ -519,6 +520,22 @@ function renderShop() {
     ${(st.shopping?.extras || []).some((x) => x.checked) ? '<p class="hint center"><button class="link" data-act="shop-clear-extras">Remove ticked extra items</button></p>' : ''}
     <p class="hint center"><button class="link" data-act="receipt-open">Back from the store? Scan the receipt to update prices</button></p>
   `;
+}
+
+// Recipes added to the list without planning them.
+function renderListRecipes() {
+  const adds = (S().shopping?.recipes || []).map((a) => ({ a, r: findRecipe(S(), a.recipeId) })).filter((x) => x.r);
+  if (!adds.length) return '';
+  return `
+    <div class="card list-recipes">
+      <span class="field-label">Also shopping for (not planned)</span>
+      <ul class="mini-list">${adds.map(({ a, r }) => {
+        const portions = Math.round(servingsOf(r) * (Number(a.scale) || 1) * 10) / 10;
+        return `<li><button class="link-ish" data-act="view-recipe" data-id="${r.id}">${esc(r.name)}</button>
+          <span class="meta">${fmtQty(portions)} portion${portions === 1 ? '' : 's'}</span>
+          <button class="icon-btn small" data-act="shop-remove-recipe" data-id="${a.id}" aria-label="Take ${esc(r.name)} off the list">×</button></li>`;
+      }).join('')}</ul>
+    </div>`;
 }
 
 function renderShopItem(i) {
@@ -1237,6 +1254,11 @@ function renderRecipeView(s) {
         ].filter(Boolean).map(esc).join(' · ')}</p>
         ${cookedLine(r)}
         ${r.steps?.length ? `<button class="btn primary wide cook-start" data-act="cook-start">Start cooking</button>` : ''}
+        ${r.ingredients?.length ? (() => {
+          const on = (S().shopping?.recipes || []).filter((a) => a.recipeId === r.id);
+          return `<button class="btn wide" data-act="list-recipe">🛒 Add ${servings} portion${servings === 1 ? '' : 's'} to the shopping list</button>
+            ${on.length ? `<p class="hint center">On the shopping list${on.length > 1 ? ` ${on.length} times` : ''} without a plan · <button class="link" data-act="unlist-recipe">Take it off</button></p>` : ''}`;
+        })() : ''}
 
         <div class="card">
           <h2 class="section tight">Plan it</h2>
@@ -3045,8 +3067,24 @@ function onClick(e) {
       if (confirm('Untick everything on the list?')) {
         st.shopping.checked = {};
         for (const x of st.shopping.extras) x.checked = false;
+        for (const a of st.shopping.recipes || []) a.bought = {};
         store.save();
       }
+      break;
+    case 'shop-remove-recipe': removeRecipeFromList(st, el.dataset.id); store.save(); break;
+    case 'list-recipe': {
+      const r = findRecipe(st, s.id);
+      const scale = (s.servings || servingsOf(r)) / servingsOf(r);
+      addRecipeToList(st, r.id, scale, uid(), today());
+      store.save();
+      renderSheet();
+      toast(`${r.name} is on the shopping list`);
+      break;
+    }
+    case 'unlist-recipe':
+      for (const a of (st.shopping.recipes || []).filter((x) => x.recipeId === s.id)) removeRecipeFromList(st, a.id);
+      store.save();
+      renderSheet();
       break;
     case 'shop-remove-extra': st.shopping.extras = st.shopping.extras.filter((x) => x.id !== el.dataset.id); store.save(); break;
     case 'shop-clear-extras': st.shopping.extras = st.shopping.extras.filter((x) => !x.checked); store.save(); break;

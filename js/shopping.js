@@ -116,19 +116,44 @@ export function shoppingList(state, from, to) {
     }
   }
 
+  // Recipes added to the list without planning them. They're on every list until removed.
+  const adds = state.shopping?.recipes || [];
+  for (const a of adds) {
+    const r = findRecipe(state, a.recipeId);
+    if (!r) continue;
+    const scale = Number(a.scale) || 1;
+    if (!recipes.has(r.id)) recipes.set(r.id, { recipe: r, cooks: [] });
+    recipes.get(r.id).cooks.push({ date: null, scale, addId: a.id });
+    for (const ing of r.ingredients || []) {
+      if (!String(ing.name || '').trim()) continue;
+      const food = (ing.foodId && getFood(state, ing.foodId)) || findFood(state, ing.name);
+      const key = food ? `f:${food.id}` : `n:${singular(norm(shopName(ing.name)))}`;
+      add(key, { name: food ? food.name : shopName(ing.name), food }, {
+        qty: ing.qty == null ? null : ing.qty * scale,
+        unit: ing.unit || '',
+        recipeId: r.id,
+        date: null,
+        addId: a.id,
+        text: ing.name,
+      });
+    }
+  }
+  const addById = new Map(adds.map((a) => [a.id, a]));
+
   const checked = state.shopping?.checked || {};
   const list = [...items.values()].map((it) => {
     const { food } = it;
     // Ticked off earlier: bought for everything cooked up to `upto`.
     // Meals planned after that still need buying, so only those show.
+    // Unplanned recipes remember their own ticks.
     const check = checked[it.key];
     let done = false;
     let boughtSome = false;
-    if (check) {
-      const later = it.parts.filter((p) => p.date > check.upto);
-      if (!later.length) done = true;
-      else if (later.length < it.parts.length) { boughtSome = true; it.parts = later; }
-    }
+    const left = it.parts.filter((p) => (p.addId
+      ? !addById.get(p.addId)?.bought?.[it.key]
+      : !(check && p.date <= check.upto)));
+    if (!left.length) done = true;
+    else if (left.length < it.parts.length) { boughtSome = true; it.parts = left; }
     let cost = null;
     if (food) {
       let sum = 0;
@@ -175,6 +200,24 @@ export function setChecked(state, key, on, to) {
   if (!state.shopping) state.shopping = { checked: {}, extras: [] };
   if (on) state.shopping.checked[key] = { upto: to };
   else delete state.shopping.checked[key];
+  for (const a of state.shopping.recipes || []) {
+    if (on) a.bought = { ...(a.bought || {}), [key]: true };
+    else if (a.bought?.[key]) { a.bought = { ...a.bought }; delete a.bought[key]; }
+  }
+}
+
+// Put a recipe on the shopping list without planning it.
+export function addRecipeToList(state, recipeId, scale = 1, id, today = '') {
+  if (!state.shopping) state.shopping = { checked: {}, extras: [] };
+  if (!state.shopping.recipes) state.shopping.recipes = [];
+  const a = { id, recipeId, scale: Math.round((Number(scale) || 1) * 1000) / 1000, addedAt: today, bought: {} };
+  state.shopping.recipes.push(a);
+  return a;
+}
+
+export function removeRecipeFromList(state, addId) {
+  if (!state.shopping?.recipes) return;
+  state.shopping.recipes = state.shopping.recipes.filter((a) => a.id !== addId);
 }
 
 // Ticks for meals that are all in the past are no longer needed.
