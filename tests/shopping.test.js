@@ -181,3 +181,27 @@ test('items can be moved to another aisle', async () => {
   for (const [k, v] of Object.entries(flatten(s))) applyRecord(other, k, v);
   assert.deepEqual(other.shopping.sections, { 'n:onion': 'Other' });
 });
+
+test('cans keep their size on the list', () => {
+  const s = kitchen();
+  s.recipes.push({
+    id: 'tc', name: 'Tailgate chili', servings: 8, tags: [], steps: [], nutrition: {},
+    ingredients: [
+      { qty: 2, unit: 'cans', name: 'diced tomatoes with juice (28 oz)' },
+      // saved before sizes were read: the size is still at the front of the name
+      { qty: 1, unit: '', name: '(15 ounce) can kidney beans, drained' },
+    ],
+  });
+  s.recipes.push({
+    id: 'tc2', name: 'Soup', servings: 4, tags: [], steps: [], nutrition: {},
+    ingredients: [{ qty: 1, unit: 'can', name: 'kidney beans (15 oz)' }, { qty: 1, unit: 'can', name: 'diced tomatoes (14.5 oz)' }],
+  });
+  addEntry(s, '2026-11-02', { type: 'cook', slot: 'dinner', recipeId: 'tc', scale: 1 });
+  let list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(list.items.find((i) => i.name === 'diced tomatoes with juice').amount, '2 cans (28 oz each)');
+  assert.equal(list.items.find((i) => i.name === 'kidney beans').amount, '1 can (15 oz)');
+  addEntry(s, '2026-11-03', { type: 'cook', slot: 'dinner', recipeId: 'tc2', scale: 1 });
+  list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(list.items.find((i) => i.name === 'kidney beans').amount, '2 cans (15 oz each)');
+  assert.equal(list.items.find((i) => i.name === 'diced tomatoes').amount, '1 can (14.5 oz)');
+});

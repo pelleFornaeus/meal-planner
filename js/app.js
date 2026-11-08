@@ -1772,6 +1772,8 @@ function renderImportCard(s) {
       <details class="paste"${s.pasteAllOpen ? ' open' : ''}>
         <summary data-act="toggle-paste-all">Or paste the whole recipe text</summary>
         <textarea rows="7" id="paste-all" placeholder="Copy the recipe from the page, with its “Ingredients” and “Instructions” headings, and paste it here.">${esc(s.pasteAll || '')}</textarea>
+        <label class="field"><span>Link to the original (optional)</span>
+          <input type="url" id="paste-source" data-bind="source" value="${esc(s.draft.source || '')}" placeholder="https://…" /></label>
         <button class="btn small" data-act="import-text">Fill in</button>
       </details>
     </div>`;
@@ -1866,7 +1868,10 @@ function importFromText(s) {
     return;
   }
   if (hasContent(s.draft) && !confirm('Replace what’s in the editor with the pasted recipe?')) return;
+  // Keep where it came from: the link typed next to the text, or the one tried above.
+  const link = ($('#paste-source')?.value || s.draft.source || s.importUrl || '').trim();
   applyImport(s, r);
+  if (/^https?:\/\/\S+\.\S+/i.test(link) && !s.draft.source) s.draft.source = link;
   s.pasteAll = '';
   s.pasteAllOpen = false;
   renderSheet();

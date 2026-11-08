@@ -144,3 +144,11 @@ test('weeks and old saves', () => {
   assert.equal(m.settings.currency, '$');
   assert.equal(m.settings.slots.length, 4);
 });
+
+test('package sizes in ingredient lines', async () => {
+  const { parseIngredient } = await import('../js/model.js');
+  assert.deepEqual(parseIngredient('2 (28 ounce) cans diced tomatoes with juice'), { qty: 2, unit: 'cans', name: 'diced tomatoes with juice (28 oz)' });
+  assert.deepEqual(parseIngredient('1 (15 ounce) can kidney beans, drained'), { qty: 1, unit: 'can', name: 'kidney beans (15 oz), drained' });
+  assert.deepEqual(parseIngredient('1 can (14.5 oz.) beef broth'), { qty: 1, unit: 'can', name: 'beef broth (14.5 oz)' });
+  assert.deepEqual(parseIngredient('1 (16-ounce) jar salsa'), { qty: 1, unit: 'jar', name: 'salsa (16 oz)' });
+});
