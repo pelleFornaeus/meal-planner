@@ -8,6 +8,7 @@ import {
   matchFood, parseReceipt, priceTrend, rememberReceiptName, setPrice, unitLabel, unitPrice,
 } from './receipt.js';
 import { readImageText } from './ocr.js';
+import { itemText, joinStep, splitStep, unusedIngredients } from './steps.js';
 import {
   amazonCartUrl, compareRows, compareTotals, getLink, instacartItems, parseAmazonLink, parsePrice, setLink, titleFromAmazonUrl,
 } from './stores.js';
@@ -1300,7 +1301,7 @@ function renderRecipeView(s) {
         ${r.steps?.length ? `
         <div class="card">
           <h2 class="section tight">Steps</h2>
-          <ol class="step-list">${r.steps.map((st) => `<li>${esc(st)}${timerButtons(st, r.name)}</li>`).join('')}</ol>
+          <ol class="step-list">${r.steps.map((st, n) => `<li>${renderStepBody(s, r, n, factor)}</li>`).join('')}</ol>
         </div>` : ''}
 
         ${r.notes ? `<div class="card"><h2 class="section tight">Notes</h2><p class="notes">${esc(r.notes)}</p></div>` : ''}
@@ -1352,8 +1353,7 @@ function renderCookSheet(s) {
             <p class="hint center">How was it?</p>
             <div class="center-row">${starsInput(r)}</div>
           </div>` : `
-          <p class="cook-step">${esc(steps[i])}</p>
-          ${timerButtons(steps[i], r.name).replace('step-timers', 'step-timers big')}`}
+          ${renderStepBody(s, r, i, factor, true)}`}
         <div class="cook-nav">
           <button class="btn" data-act="cook-step" data-delta="-1" ${i === 0 ? 'disabled' : ''}>‹ Back</button>
           ${done ? '<button class="btn primary" data-act="sheet-close">Finish</button>' : `<button class="btn primary" data-act="cook-step" data-delta="1">${i === steps.length - 1 ? 'Finish' : 'Next ›'}</button>`}
@@ -1642,10 +1642,10 @@ function guessSlot(r) {
 function draftFrom(r) {
   const d = JSON.parse(JSON.stringify(r || blankRecipe()));
   d.ingredients = (d.ingredients || []).map((i) => ({ ...i, qtyText: i.qty != null ? fmtQty(i.qty) : '' }));
-  d.steps = (d.steps || []).slice();
+  d.steps = (d.steps || []).map(splitStep);
   d.nutrition = { ...(d.nutrition || {}) };
   if (!d.ingredients.length) d.ingredients.push({ id: uid(), qtyText: '', unit: '', name: '' });
-  if (!d.steps.length) d.steps.push('');
+  if (!d.steps.length) d.steps.push({ text: '', items: [] });
   return d;
 }
 
@@ -1716,11 +1716,7 @@ function renderRecipeEdit(s) {
         <div class="card">
           <h2 class="section tight">Steps</h2>
           <ol class="ed-steps">
-            ${d.steps.map((st, n) => `
-              <li>
-                <textarea rows="2" data-bind="steps.${n}" placeholder="Step ${n + 1}">${esc(st)}</textarea>
-                <button class="icon-btn small" data-act="ed-remove-step" data-index="${n}" aria-label="Remove">×</button>
-              </li>`).join('')}
+            ${d.steps.map((st, n) => renderStepEdit(s, st, n)).join('')}
           </ol>
           <div class="btn-row"><button class="btn small" data-act="ed-add-step">+ Step</button></div>
           <details class="paste"${s.pasteStepsOpen ? ' open' : ''}>
@@ -1757,6 +1753,57 @@ function renderRecipeEdit(s) {
     </div>`;
 }
 
+// One step in the editor: its text, its checklist, and buttons to move it.
+function renderStepEdit(s, st, n) {
+  const d = s.draft;
+  const ings = d.ingredients.filter((i) => i.name.trim()).map((i) => ingredientText({ qty: parseQty(i.qtyText), unit: i.unit, name: i.name.trim() }));
+  const others = new Set(d.steps.filter((x, k) => k !== n).flatMap((x) => x.items));
+  const picking = s.pickIngs === n;
+  return `
+    <li class="ed-step">
+      <div class="ed-step-main">
+        <textarea rows="2" data-bind="steps.${n}.text" placeholder="Step ${n + 1}, like “Combine the dry ingredients”">${esc(st.text)}</textarea>
+        <div class="ed-step-tools">
+          <button class="icon-btn small" data-act="ed-move-step" data-index="${n}" data-delta="-1" aria-label="Move up" ${n === 0 ? 'disabled' : ''}>↑</button>
+          <button class="icon-btn small" data-act="ed-move-step" data-index="${n}" data-delta="1" aria-label="Move down" ${n === d.steps.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="icon-btn small" data-act="ed-remove-step" data-index="${n}" aria-label="Remove step">×</button>
+        </div>
+      </div>
+      ${st.items.length ? `<ul class="ed-items">${st.items.map((it, m) => `
+        <li><span class="box" aria-hidden="true"></span>
+          <input type="text" data-bind="steps.${n}.items.${m}" value="${esc(it)}" placeholder="Checklist item" aria-label="Checklist item" />
+          <button class="icon-btn small" data-act="ed-remove-item" data-index="${n}" data-item="${m}" aria-label="Remove item">×</button></li>`).join('')}</ul>` : ''}
+      <div class="ed-step-add">
+        <button class="link" data-act="ed-add-item" data-index="${n}">+ Checklist item</button>
+        ${ings.length ? `<button class="link" data-act="ed-pick-ings" data-index="${n}">${picking ? 'Cancel' : '+ Ingredients'}</button>` : ''}
+      </div>
+      ${picking ? `
+        <div class="ing-picker">
+          ${ings.map((t) => {
+            const on = s.picked.includes(t) || st.items.includes(t);
+            return `<button class="chip tiny${on ? ' on' : ''}${others.has(t) ? ' used' : ''}" data-act="ed-pick-ing" data-text="${esc(t)}" ${st.items.includes(t) ? 'disabled' : ''}>${esc(t)}</button>`;
+          }).join('')}
+          <p class="hint flush">Faded ones are already in another step.</p>
+          <button class="btn small primary" data-act="ed-add-picked" ${s.picked.length ? '' : 'disabled'}>Add ${s.picked.length || ''} to this step</button>
+        </div>` : ''}
+    </li>`;
+}
+
+// A step with its checklist, for the recipe and cooking mode. Ticks last while the page is open.
+function renderStepBody(s, r, n, factor, big = false) {
+  const { text, items } = splitStep(r.steps[n]);
+  return `
+    <${big ? 'p class="cook-step"' : 'span class="step-text"'}>${esc(text)}</${big ? 'p' : 'span'}>
+    ${items.length ? `<ul class="step-checks${big ? ' big' : ''}">${items.map((it, m) => {
+      const k = `${n}:${m}`;
+      const on = !!s.checks?.[k];
+      return `<li><button class="step-check${on ? ' on' : ''}" data-act="step-check" data-key="${k}" aria-pressed="${on}">
+        <span class="check${on ? ' on' : ''}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+        <span>${esc(itemText(it, r.ingredients, factor))}</span></button></li>`;
+    }).join('')}</ul>` : ''}
+    ${big ? timerButtons(text, r.name).replace('step-timers', 'step-timers big') : timerButtons(text, r.name)}`;
+}
+
 // ----- Importing a recipe -----
 
 function renderImportCard(s) {
@@ -1788,7 +1835,7 @@ function applyImport(s, r) {
   if (r.ingredients.length) {
     d.ingredients = r.ingredients.map((i) => ({ id: uid(), qtyText: i.qty != null ? fmtQty(i.qty) : '', unit: i.unit, name: i.name }));
   }
-  if (r.steps.length) d.steps = r.steps.slice();
+  if (r.steps.length) d.steps = r.steps.map(splitStep);
   for (const [k, v] of Object.entries(r.nutrition || {})) d.nutrition[k] = v;
   if (r.notes && !d.notes) d.notes = r.notes;
   if (r.source) d.source = r.source;
@@ -1802,7 +1849,7 @@ function applyImport(s, r) {
 }
 
 function hasContent(d) {
-  return d.name.trim() || d.ingredients.some((i) => i.name.trim()) || d.steps.some((x) => x.trim());
+  return d.name.trim() || d.ingredients.some((i) => i.name.trim()) || d.steps.some((x) => x.text.trim() || x.items.length);
 }
 
 async function importFunction(body) {
@@ -1927,7 +1974,7 @@ function saveRecipe(s) {
       .map((i) => ({
         id: i.id || uid(), qty: parseQty(i.qtyText), unit: (i.unit || '').trim(), name: i.name.trim(), ...(i.foodId ? { foodId: i.foodId } : {}),
       })),
-    steps: d.steps.map((x) => x.trim()).filter(Boolean),
+    steps: d.steps.map(joinStep).filter(Boolean),
     nutrition,
     cost: parseQty(d.costText ?? (d.cost ?? '')),
     source: (d.source || '').trim(),
@@ -3281,14 +3328,50 @@ function onClick(e) {
       break;
     }
     case 'ed-add-step':
-      s.draft.steps.push('');
+      s.draft.steps.push({ text: '', items: [] });
       renderSheet();
-      $(`[data-bind="steps.${s.draft.steps.length - 1}"]`)?.focus();
+      $(`[data-bind="steps.${s.draft.steps.length - 1}.text"]`)?.focus();
       break;
     case 'ed-remove-step': s.draft.steps.splice(Number(el.dataset.index), 1); renderSheet(); break;
+    case 'ed-move-step': {
+      const n = Number(el.dataset.index);
+      const to = n + Number(el.dataset.delta);
+      if (to >= 0 && to < s.draft.steps.length) [s.draft.steps[n], s.draft.steps[to]] = [s.draft.steps[to], s.draft.steps[n]];
+      renderSheet();
+      break;
+    }
+    case 'ed-add-item': {
+      const st = s.draft.steps[Number(el.dataset.index)];
+      st.items.push('');
+      renderSheet();
+      $(`[data-bind="steps.${el.dataset.index}.items.${st.items.length - 1}"]`)?.focus();
+      break;
+    }
+    case 'ed-remove-item': s.draft.steps[Number(el.dataset.index)].items.splice(Number(el.dataset.item), 1); renderSheet(); break;
+    case 'ed-pick-ings': s.pickIngs = s.pickIngs === Number(el.dataset.index) ? null : Number(el.dataset.index); s.picked = []; renderSheet(); break;
+    case 'ed-pick-ing': {
+      const t = el.dataset.text;
+      s.picked = s.picked.includes(t) ? s.picked.filter((x) => x !== t) : [...s.picked, t];
+      renderSheet();
+      break;
+    }
+    case 'ed-add-picked': {
+      const st = s.draft.steps[s.pickIngs];
+      st.items = st.items.filter((x) => x.trim()).concat(s.picked.filter((t) => !st.items.includes(t)));
+      s.pickIngs = null;
+      s.picked = [];
+      renderSheet();
+      break;
+    }
+    case 'step-check': {
+      if (!s.checks) s.checks = {};
+      s.checks[el.dataset.key] = !s.checks[el.dataset.key];
+      renderSheet();
+      break;
+    }
     case 'ed-paste-steps': {
-      const steps = parseSteps($('#paste-steps')?.value);
-      s.draft.steps = s.draft.steps.filter((x) => x.trim()).concat(steps);
+      const steps = parseSteps($('#paste-steps')?.value).map((t) => ({ text: t, items: [] }));
+      s.draft.steps = s.draft.steps.filter((x) => x.text.trim() || x.items.length).concat(steps);
       s.pasteStepsOpen = false;
       s.pasteSteps = '';
       renderSheet();
