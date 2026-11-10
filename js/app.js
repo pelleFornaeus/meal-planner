@@ -15,7 +15,7 @@ import {
 import { autoPlan, planTotals, useItUp, useSoon, weekDays } from './planner.js';
 import { yearRecap } from './recap.js';
 import {
-  addRecipeToList, amountText, clearShopping, setSection, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals,
+  addRecipeToList, amountText, clearBought, clearShopping, setSection, guessStaple, itemKey, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals,
 } from './shopping.js';
 import {
   clockText, copyWeek, cookDates, lastCooked, pickSurprise, stepTimers,
@@ -419,8 +419,11 @@ function shopGroups() {
   }));
   const keep = (i) => !picked.size || i.recipes.some((id) => picked.has(id)) || (picked.has('foods') && i.hasFoods);
   const atHome = list.items.filter((i) => i.atHome && keep(i));
-  const items = list.items.filter((i) => !i.atHome && keep(i));
-  const shownExtras = picked.size ? [] : extras;
+  // Bought items move to the Bought list.
+  const bought = [...list.items.filter((i) => !i.atHome && i.done && !i.cleared), ...extras.filter((x) => x.done)]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const items = list.items.filter((i) => !i.atHome && !i.done && keep(i));
+  const shownExtras = picked.size ? [] : extras.filter((x) => !x.done);
   const order = (a, b) => (a.done - b.done) || a.name.localeCompare(b.name);
   let groups;
   if (ui.shopGroup === 'recipe') {
@@ -448,7 +451,7 @@ function shopGroups() {
   const visible = [...items, ...shownExtras];
   const open = visible.filter((i) => !i.done);
   return {
-    list, groups, from, to, atHome, open,
+    list, groups, from, to, atHome, open, bought,
     left: open.length,
     total: visible.length,
     cost: open.reduce((s, i) => s + (i.cost || 0), 0),
@@ -458,6 +461,7 @@ function shopGroups() {
 
 function renderShop() {
   if (ui.shopView === 'pantry') return renderPantry();
+  if (ui.shopView === 'bought') return renderBought();
   const st = S();
   const { from, to, days } = shopRange();
   const g = shopGroups();
@@ -490,8 +494,8 @@ function renderShop() {
       </div>` : ''}
     ${g.total ? `
       <div class="shop-summary">
-        <span><strong>${g.left}</strong> of ${g.total} left${g.cost ? ` · about <strong>${esc(money(g.cost))}</strong>` : ''}</span>
-        ${g.left < g.total ? '<button class="link" data-act="shop-uncheck">Untick all</button>' : ''}
+        <span><strong>${g.left}</strong> to buy${g.cost ? ` · about <strong>${esc(money(g.cost))}</strong>` : ''}</span>
+        ${g.bought.length ? `<button class="link" data-act="shop-view" data-view="bought">${g.bought.length} bought</button>` : ''}
       </div>
       ${g.left ? '<button class="btn wide send-btn" data-act="shop-send">🛒 Send to Amazon or Instacart</button>' : ''}
       ${g.unpriced && g.cost ? `<p class="hint">${g.unpriced} item${g.unpriced === 1 ? ' has' : 's have'} no price, so the total leaves ${g.unpriced === 1 ? 'it' : 'them'} out.</p>` : ''}
@@ -519,7 +523,6 @@ function renderShop() {
       <input id="shop-extra" class="search" type="text" placeholder="Add an item, like paper towels" autocomplete="off" enterkeyhint="done" />
       <button class="btn primary" type="submit">Add</button>
     </form>
-    ${(st.shopping?.extras || []).some((x) => x.checked) ? '<p class="hint center"><button class="link" data-act="shop-clear-extras">Remove ticked extra items</button></p>' : ''}
     <p class="hint center"><button class="link" data-act="receipt-open">Back from the store? Scan the receipt to update prices</button></p>
   `;
 }
@@ -570,11 +573,40 @@ function renderShopItem(i) {
 
 function shopSwitch() {
   const n = (S().pantry || []).length;
+  const b = shopGroups().bought.length;
+  const v = ui.shopView === 'pantry' || ui.shopView === 'bought' ? ui.shopView : 'list';
   return `
     <div class="seg">
-      <button class="${ui.shopView !== 'pantry' ? 'on' : ''}" data-act="shop-view" data-view="list">To buy</button>
-      <button class="${ui.shopView === 'pantry' ? 'on' : ''}" data-act="shop-view" data-view="pantry">At home${n ? ` (${n})` : ''}</button>
+      <button class="${v === 'list' ? 'on' : ''}" data-act="shop-view" data-view="list">To buy</button>
+      <button class="${v === 'bought' ? 'on' : ''}" data-act="shop-view" data-view="bought">Bought${b ? ` (${b})` : ''}</button>
+      <button class="${v === 'pantry' ? 'on' : ''}" data-act="shop-view" data-view="pantry">At home${n ? ` (${n})` : ''}</button>
     </div>`;
+}
+
+// Things ticked off the list. Tap one to put it back; Clear empties the list.
+function renderBought() {
+  const g = shopGroups();
+  return `
+    <header class="page-header">
+      <h1>Shopping</h1>
+      ${g.bought.length ? '<button class="btn small" data-act="shop-clear-bought">Clear</button>' : ''}
+    </header>
+    ${shopSwitch()}
+    ${g.bought.length ? `
+      <p class="hint">Tap an item to put it back on the list. The house button moves it to <strong>At home</strong>.</p>
+      <ul class="food-list shop-list">${g.bought.map((i) => `
+        <li class="shop-item is-done">
+          <button class="food-row" data-act="shop-check" data-key="${esc(i.key)}" aria-pressed="true">
+            <span class="check on" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+            <span class="entry-main"><span class="title">${esc(i.name)}${i.amount ? ` <span class="amount">${esc(i.amount)}</span>` : ''}</span></span>
+            ${i.cost != null ? `<span class="price">${esc(money(i.cost))}</span>` : ''}
+          </button>
+          ${i.extra ? '' : `<button class="have-btn" data-act="bought-home" data-key="${esc(i.key)}" data-name="${esc(i.name)}" data-food="${i.food?.id || ''}" title="Put it in At home" aria-label="Put ${esc(i.name)} in At home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z"/></svg></button>`}
+        </li>`).join('')}</ul>
+      <p class="hint center"><button class="link" data-act="shop-uncheck">Put everything back on the list</button></p>
+    ` : '<p class="empty">Nothing here. Items you tick off on the To buy list move here.</p>'}
+    <p class="hint center"><button class="link" data-act="receipt-open">Back from the store? Scan the receipt to update prices</button></p>
+  `;
 }
 
 function renderPantry() {
@@ -3124,8 +3156,23 @@ function onClick(e) {
       store.save();
       break;
     }
+    case 'shop-clear-bought': {
+      const { from, to } = shopRange();
+      clearBought(st, from, to);
+      store.save();
+      toast('Bought list cleared');
+      break;
+    }
+    case 'bought-home': {
+      addToPantry(el.dataset.name, el.dataset.food);
+      const { from, to } = shopRange();
+      setChecked(st, el.dataset.key, false, to);
+      store.save();
+      toast(`${el.dataset.name} is in At home`);
+      break;
+    }
     case 'shop-uncheck':
-      if (confirm('Untick everything on the list?')) {
+      if (confirm('Put everything back on the list?')) {
         st.shopping.checked = {};
         for (const x of st.shopping.extras) x.checked = false;
         for (const a of st.shopping.recipes || []) a.bought = {};

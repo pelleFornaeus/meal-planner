@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addEntry, defaultState, migrate, refOf } from '../js/model.js';
-import { addRecipeToList, amountText, clearShopping, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals } from '../js/shopping.js';
+import { addRecipeToList, amountText, clearBought, clearShopping, listText, pruneChecks, removeRecipeFromList, removeRecipeFromShopping, setChecked, shoppingList, skipMeals } from '../js/shopping.js';
 import { applyRecord, flatten } from '../js/records.js';
 
 function kitchen() {
@@ -204,4 +204,34 @@ test('cans keep their size on the list', () => {
   list = shoppingList(s, '2026-11-01', '2026-11-07');
   assert.equal(list.items.find((i) => i.name === 'kidney beans').amount, '2 cans (15 oz each)');
   assert.equal(list.items.find((i) => i.name === 'diced tomatoes').amount, '1 can (14.5 oz)');
+});
+
+test('clearing the Bought list hides ticked items without putting them back', () => {
+  const s = kitchen();
+  addEntry(s, '2026-11-02', { type: 'cook', slot: 'dinner', recipeId: 'chili', scale: 1 });
+  addRecipeToList(s, 'pancakes', 1, 'q1', '2026-11-01');
+  s.shopping.extras.push({ id: 'x1', name: 'paper towels', checked: true }, { id: 'x2', name: 'foil', checked: false });
+  setChecked(s, 'n:ground beef', true, '2026-11-07');
+  setChecked(s, 'f:milk', true, '2026-11-07');
+  let list = shoppingList(s, '2026-11-01', '2026-11-07');
+  const beef = () => list.items.find((i) => i.name === 'ground beef');
+  const milk = () => list.items.find((i) => i.name === 'Milk');
+  assert.equal(beef().done, true);
+  assert.equal(beef().cleared, false);
+  clearBought(s, '2026-11-01', '2026-11-07');
+  list = shoppingList(s, '2026-11-01', '2026-11-07');
+  assert.equal(beef().done, true);
+  assert.equal(beef().cleared, true);
+  assert.equal(milk().done, true);
+  assert.equal(milk().cleared, true);
+  assert.equal(list.items.find((i) => i.name === 'onion').done, false);
+  assert.deepEqual(s.shopping.extras.map((x) => x.id), ['x2']);
+  // A meal planned later still needs buying, and a new tick isn't cleared.
+  addEntry(s, '2026-11-10', { type: 'cook', slot: 'dinner', recipeId: 'chili', scale: 1 });
+  list = shoppingList(s, '2026-11-01', '2026-11-14');
+  assert.equal(beef().done, false);
+  setChecked(s, 'n:ground beef', true, '2026-11-14');
+  list = shoppingList(s, '2026-11-01', '2026-11-14');
+  assert.equal(beef().done, true);
+  assert.equal(beef().cleared, false);
 });

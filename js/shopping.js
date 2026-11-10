@@ -190,6 +190,12 @@ export function shoppingList(state, from, to) {
       : !(check && p.date <= check.upto)));
     if (!left.length) done = true;
     else if (left.length < it.parts.length) { boughtSome = true; it.parts = left; }
+    // Cleared from the Bought list: every tick behind it was cleared.
+    const ticks = [
+      ...(it.parts.some((p) => !p.addId) && check ? [check] : []),
+      ...[...new Set(it.parts.filter((p) => p.addId).map((p) => p.addId))].map((id) => addById.get(id)?.bought?.[it.key]),
+    ];
+    const cleared = done && ticks.length > 0 && ticks.every((t) => t === 'cleared' || t?.cleared);
     let cost = null;
     if (food) {
       let sum = 0;
@@ -213,6 +219,7 @@ export function shoppingList(state, from, to) {
       hasFoods: it.parts.some((p) => !p.recipeId),
       parts: it.parts,
       done,
+      cleared,
       boughtSome,
       atHome: null,
     };
@@ -269,6 +276,21 @@ export function clearShopping(state, from, to) {
   skipMeals(state, [...list.recipes.flatMap((x) => x.cooks.filter((c) => c.ref).map((c) => c.ref)), ...list.foodRefs]);
   state.shopping.recipes = [];
   state.shopping.extras = [];
+}
+
+// Empty the Bought list. The items stay bought (they don't come back on the list),
+// they just aren't shown any more. Ticked extra items are removed.
+export function clearBought(state, from, to) {
+  const list = shoppingList(state, from, to);
+  for (const it of list.items) {
+    if (!it.done || it.cleared) continue;
+    const check = state.shopping.checked[it.key];
+    if (check) state.shopping.checked[it.key] = { ...check, cleared: true };
+    for (const a of state.shopping.recipes || []) {
+      if (a.bought?.[it.key]) a.bought = { ...a.bought, [it.key]: 'cleared' };
+    }
+  }
+  state.shopping.extras = (state.shopping.extras || []).filter((x) => !x.checked);
 }
 
 // Move an item to another aisle. Saved foods remember it themselves.
