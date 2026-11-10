@@ -3,7 +3,7 @@
 // Pure functions, so they can be tested.
 import { addDays, daysBetween } from './dates.js';
 import {
-  dayEntries, findFood, findRecipe, fmtQty, getFood,
+  dayEntries, findFood, findRecipe, fmtQty, getFood, splitPackSize,
 } from './model.js';
 import {
   foodSection, guessSection, isMass, isVolume, normUnit, plainGrams, priceFor, toBase,
@@ -43,10 +43,18 @@ export function pantryFor(state, item) {
 export function amountText(parts, food) {
   const withQty = parts.filter((p) => p.qty != null && Number.isFinite(p.qty));
   if (!withQty.length) return '';
-  const units = [...new Set(withQty.map((p) => normUnit(p.unit)))];
+  const groupOf = (p) => `${normUnit(p.unit)}|${p.size || ''}`;
+  const units = [...new Set(withQty.map(groupOf))];
   if (units.length === 1) {
     const sum = withQty.reduce((s, p) => s + p.qty, 0);
-    return [fmtQty(sum), withQty[0].unit].filter(Boolean).join(' ');
+    return packText(sum, withQty[0]);
+  }
+  // Packages of a set size ("2 cans (28 oz each)") are listed as they are.
+  if (withQty.some((p) => p.size)) {
+    return units.map((u) => {
+      const same = withQty.filter((p) => groupOf(p) === u);
+      return packText(same.reduce((s, p) => s + p.qty, 0), same[0]);
+    }).join(' + ');
   }
   // Different units: add them up by weight (or volume) when we can.
   if (food) {
@@ -63,16 +71,33 @@ export function amountText(parts, food) {
   }
   // Otherwise list each unit's total.
   return units.map((u) => {
-    const same = withQty.filter((p) => normUnit(p.unit) === u);
+    const same = withQty.filter((p) => groupOf(p) === u);
     return [fmtQty(same.reduce((s, p) => s + p.qty, 0)), same[0].unit].filter(Boolean).join(' ');
   }).join(' + ');
 }
+
+// "2 cans (28 oz each)", "1 can (15 oz)", "500 g"
+function packText(qty, part) {
+  let unit = part.unit || '';
+  if (part.size && unit) unit = qty > 1 ? plural(unit) : singularWord(unit);
+  const base = [fmtQty(qty), unit].filter(Boolean).join(' ');
+  return part.size ? `${base} (${part.size}${qty > 1 ? ' each' : ''})` : base;
+}
+const plural = (w) => (/s$/.test(w) ? w : /(x|ch)$/.test(w) ? `${w}es` : `${w}s`);
+const singularWord = (w) => w.replace(/(xes|ches)$/, (m) => m.slice(0, -2)).replace(/([^s])s$/, '$1');
 
 function weightText(g) {
   return g >= 1000 ? `${fmtQty(Math.round(g / 10) / 100)} kg` : `${Math.round(g)} g`;
 }
 function volumeText(ml) {
   return ml >= 1000 ? `${fmtQty(Math.round(ml / 10) / 100)} l` : `${Math.round(ml)} ml`;
+}
+
+// An ingredient with its package size taken out of the name.
+function packed(ing) {
+  const p = splitPackSize(ing);
+  if (!p.size) return { ing, size: '' };
+  return { ing: { ...ing, unit: p.unit, name: p.name }, size: p.size };
 }
 
 // The batches cooked between from and to, and foods added to those days.
@@ -100,13 +125,15 @@ export function shoppingList(state, from, to) {
         const scale = Number(e.scale) || 1;
         if (!recipes.has(r.id)) recipes.set(r.id, { recipe: r, cooks: [] });
         recipes.get(r.id).cooks.push({ date, scale, ref });
-        for (const ing of r.ingredients || []) {
-          if (!String(ing.name || '').trim()) continue;
+        for (const raw of r.ingredients || []) {
+          if (!String(raw.name || '').trim()) continue;
+          const { ing, size } = packed(raw);
           const food = (ing.foodId && getFood(state, ing.foodId)) || findFood(state, ing.name);
           const key = food ? `f:${food.id}` : `n:${singular(norm(shopName(ing.name)))}`;
           add(key, { name: food ? food.name : shopName(ing.name), food }, {
             qty: ing.qty == null ? null : ing.qty * scale,
             unit: ing.unit || '',
+            size,
             recipeId: r.id,
             date,
             text: ing.name,
@@ -131,13 +158,15 @@ export function shoppingList(state, from, to) {
     const scale = Number(a.scale) || 1;
     if (!recipes.has(r.id)) recipes.set(r.id, { recipe: r, cooks: [] });
     recipes.get(r.id).cooks.push({ date: null, scale, addId: a.id });
-    for (const ing of r.ingredients || []) {
-      if (!String(ing.name || '').trim()) continue;
+    for (const raw of r.ingredients || []) {
+      if (!String(raw.name || '').trim()) continue;
+      const { ing, size } = packed(raw);
       const food = (ing.foodId && getFood(state, ing.foodId)) || findFood(state, ing.name);
       const key = food ? `f:${food.id}` : `n:${singular(norm(shopName(ing.name)))}`;
       add(key, { name: food ? food.name : shopName(ing.name), food }, {
         qty: ing.qty == null ? null : ing.qty * scale,
         unit: ing.unit || '',
+        size,
         recipeId: r.id,
         date: null,
         addId: a.id,
@@ -166,7 +195,8 @@ export function shoppingList(state, from, to) {
       let sum = 0;
       let ok = true;
       for (const p of it.parts) {
-        const c = p.qty == null ? null : priceFor(food, p.qty, p.unit);
+        const sz = p.size ? p.size.match(/^([\d.]+)\s+(.+)$/) : null;
+        const c = p.qty == null ? null : sz ? priceFor(food, p.qty * Number(sz[1]), sz[2]) : priceFor(food, p.qty, p.unit);
         if (c == null) { ok = false; break; }
         sum += c;
       }

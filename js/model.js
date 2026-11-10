@@ -133,15 +133,52 @@ const UNIT_RE = UNITS.slice().sort((a, b) => b.length - a.length).map((u) => u.r
 const QTY_RE = '(\\d+\\s+\\d+/\\d+|\\d+/\\d+|\\d+[.,]?\\d*\\s*[½⅓⅔¼¾⅛⅕]?|[½⅓⅔¼¾⅛⅕])';
 
 // "2 1/2 cups flour" -> { qty: 2.5, unit: 'cups', name: 'flour' }
-export function parseIngredient(line) {
-  const text = String(line || '').replace(/^[-•*\s]+/, '').trim();
-  if (!text) return null;
+function parseIngredientRaw(text) {
   const m = text.match(new RegExp(`^${QTY_RE}\\s*(?:(${UNIT_RE})\\.?\\b)?\\s*(?:of\\s+)?(.*)$`, 'i'));
   if (!m) return { qty: null, unit: '', name: text };
   const qty = parseQty(m[1]);
   const name = (m[3] || '').trim();
   if (!name && !m[2]) return { qty: null, unit: '', name: text };
   return { qty, unit: (m[2] || '').toLowerCase().replace(/\s+/, ' '), name: name || text };
+}
+
+export function parseIngredient(line) {
+  const text = String(line || '').replace(/^[-•*\s]+/, '').trim();
+  if (!text) return null;
+  const ing = parseIngredientRaw(text);
+  // "2 (28 ounce) cans diced tomatoes" -> 2 cans, "diced tomatoes (28 oz)"
+  const p = splitPackSize(ing);
+  if (!p.size) return ing;
+  const comma = p.name.indexOf(',');
+  const name = comma > 0 ? `${p.name.slice(0, comma)} (${p.size})${p.name.slice(comma)}` : `${p.name} (${p.size})`;
+  return { qty: ing.qty, unit: p.unit, name };
+}
+
+// Package sizes: "(28 ounce)", "(15 oz.)", "(14.5-ounce)".
+const SIZE_RE = /\(\s*(\d[\d.,/]*(?:\s*-\s*\d[\d.,/]*)?)\s*-?\s*(fluid ounces?|fl\.? ?oz|ounces?|oz|pounds?|lbs?|lb|grams?|g|kilograms?|kg|milliliters?|millilitres?|ml|liters?|litres?|l|count|ct)\.?\s*(?:each)?\s*\)/i;
+const PACK_RE = /^(cans?|tins?|jars?|packages?|pkgs?|packs?|bottles?|box(?:es)?|bags?|cartons?|containers?|tubs?|envelopes?|packets?|pouch(?:es)?)\b\.?\s*/i;
+const SIZE_UNITS = {
+  'fluid ounce': 'fl oz', 'fluid ounces': 'fl oz', 'fl oz': 'fl oz', 'fl. oz': 'fl oz', floz: 'fl oz',
+  ounce: 'oz', ounces: 'oz', oz: 'oz', pound: 'lb', pounds: 'lb', lbs: 'lb', lb: 'lb',
+  gram: 'g', grams: 'g', g: 'g', kilogram: 'kg', kilograms: 'kg', kg: 'kg',
+  milliliter: 'ml', milliliters: 'ml', millilitre: 'ml', millilitres: 'ml', ml: 'ml',
+  liter: 'l', liters: 'l', litre: 'l', litres: 'l', l: 'l', count: 'count', ct: 'count',
+};
+
+// Pulls a package size out of an ingredient: { unit: 'cans', size: '28 oz', name: 'diced tomatoes' }.
+// Works for "(28 ounce) cans diced tomatoes" with no unit and for "diced tomatoes (28 oz)" with unit "cans".
+export function splitPackSize(ing) {
+  let name = String(ing?.name || '').trim();
+  let unit = ing?.unit || '';
+  const m = name.match(SIZE_RE);
+  if (!m) return { unit, size: '', name };
+  const size = `${m[1].replace(/\s+/g, '')} ${SIZE_UNITS[m[2].toLowerCase().replace(/\s+/g, ' ')] || m[2].toLowerCase()}`;
+  name = `${name.slice(0, m.index)} ${name.slice(m.index + m[0].length)}`.replace(/\s+/g, ' ').replace(/^[\s,]+|[\s,]+$/g, '').trim();
+  if (!unit) {
+    const p = name.match(PACK_RE);
+    if (p) { unit = p[1].toLowerCase(); name = name.slice(p[0].length).trim(); }
+  }
+  return { unit, size, name: name.replace(/^of\s+/i, '') };
 }
 
 export function ingredientText(ing, factor = 1) {

@@ -68,7 +68,7 @@ const INSTACART_UNITS = {
 
 // "500 g" -> { quantity: 500, unit: 'gram' }; null when it can't be said simply ("1 can + 2 cups").
 export function instacartMeasure(amount) {
-  const t = String(amount || '').trim();
+  const t = String(amount || '').replace(/\s*\([^)]*\)\s*$/, '').trim();
   if (!t || t.includes('+')) return null;
   const m = t.match(/^([\d.,/½⅓⅔¼¾⅛⅕ ]+?)\s*([a-z. ]*)$/i);
   if (!m) return null;
