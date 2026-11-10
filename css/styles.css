@@ -683,3 +683,34 @@ h2.recipe-title { font-size: 20px; }
 .list-recipes .meta { color: var(--muted); font-size: 13px; flex: 1; }
 .hint.right { text-align: right; margin: 0 4px 4px; }
 .aisle-pick { margin-right: 8px; max-width: 130px; font-size: 14px; padding: 6px 8px; }
+
+/* ---------- Steps with checklists ---------- */
+.ed-steps li.ed-step { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.ed-steps li.ed-step::before { display: none; }
+.ed-step-main { display: flex; gap: 6px; align-items: flex-start; }
+.ed-step-main textarea { flex: 1; }
+.ed-step-tools { display: flex; flex-direction: column; gap: 2px; }
+.ed-step-tools .icon-btn:disabled { opacity: .3; }
+.ed-items { list-style: none; margin: 0 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ed-items li { display: flex; gap: 6px; align-items: center; }
+.ed-items input { flex: 1; min-width: 0; }
+.ed-items .box { width: 14px; height: 14px; border: 1.5px solid var(--muted); border-radius: 4px; flex: none; }
+.ed-step-add { display: flex; gap: 16px; margin-left: 14px; font-size: 14px; }
+.ing-picker { margin-left: 14px; padding: 10px; background: var(--surface-2); border-radius: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.ing-picker .chip.used:not(.on) { opacity: .5; }
+.ing-picker .chip:disabled { opacity: .4; }
+.ing-picker .hint, .ing-picker .btn { flex-basis: 100%; }
+.step-text { white-space: pre-line; }
+.step-checks { list-style: none; margin: 6px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.step-check { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 4px 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.step-check .check { width: 20px; height: 20px; flex: none; }
+.step-check.on > span:last-child { text-decoration: line-through; color: var(--muted); }
+.step-checks.big .step-check { font-size: 19px; padding: 8px 0; }
+.step-checks.big .step-check .check { width: 26px; height: 26px; }
+.step-check .check { width: 24px; height: 24px; }
+.step-check .check svg { width: 22px; height: 22px; border-radius: 6px; }
+.step-checks.big .step-check .check { width: 30px; height: 30px; }
+.step-checks.big .step-check .check svg { width: 28px; height: 28px; }
+.ed-items li::before { display: none; content: none; }
+.ed-step-main::before { counter-increment: step; content: counter(step) "."; color: var(--muted); font-size: 14px; padding-top: 11px; width: 18px; flex: none; }
+.ed-items, .ed-step-add, .ing-picker { margin-left: 24px; }
